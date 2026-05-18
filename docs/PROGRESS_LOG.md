@@ -32,6 +32,20 @@
 
 <!-- progress-log-entries -->
 
+### 2026-05-18 — [docs] สรุปปิดรอบงานรายวัน
+- **สรุป:** รวบรวมงานพัฒนาและตั้งค่า repo ในวันเดียว — ฟีเจอร์แอดมิน/แฟรนไชส์, แก้การแสดงชื่อสินค้า (BUNDLE_IDS), เปิด Git ครั้งแรกและอัปโหลด GitHub
+- **ฟีเจอร์หลัก:** (1) `AdminReports` — ไม่นับออเดอร์ยกเลิก, จัดอันดับสินค้าขายดี qty/revenue, ดู/พิมพ์ใบกำกับ (2) `printService` + `AdminOrders` + `PackingModal` — ซ่อน BUNDLE_IDS (3) `AdminDashboard` — UI สินค้าขายดี/ลูกค้า (4) `StockManagement` + `FranchiseStockManagement` — มุมมอง ทั้งหมด / ตามซัพพลาย
+- **Git / GitHub:** `git init` → commit `a74847e` (227 ไฟล์) → `origin` [saocafe31-pixel/app-rangsan](https://github.com/saocafe31-pixel/app-rangsan) สาขา `main`; `.env.local` ไม่ถูก commit
+- **ไฟล์หลัก:** ดูรายการ `2026-05-18` ด้านล่างในไฟล์นี้; `README.md` (ลิงก์ repo)
+- **ตรวจสอบ:** `npm run build` ผ่าน, `git push -u origin main` สำเร็จ
+- **ลบไฟล์ชั่วคราว:** -
+
+### 2026-05-18 — [chore] เปิด Git repository และ push ขึ้น GitHub
+- **สรุป:** เริ่มใช้ Git ในโปรเจกต์ครั้งแรก — initial commit รวมโค้ดและเอกสารทั้งหมด แล้วเชื่อม remote และ push สาขา `main`
+- **ไฟล์หลัก:** `.git/` (local), remote `https://github.com/saocafe31-pixel/app-rangsan.git`
+- **ตรวจสอบ:** `git status` clean, `git log -1` = `a74847e`, `origin/main` ตรงกับ local
+- **ลบไฟล์ชั่วคราว:** -
+
 ### 2026-05-18 — [feat] จัดการสต็อกแฟรนไชส์: มุมมองทั้งหมด / ตามซัพพลาย
 - **สรุป:** หน้าจัดการสต็อกแฟรนไชส์ (แท็บสต็อกทั้งหมดและแจ้งเตือนสต็อกต่ำ) มีปุ่มสลับ «ทั้งหมด» / «ตามซัพพลาย» เหมือนแอดมิน — การ์ดซัพ กดเข้าแล้วเห็นตารางสินค้าพร้อมปุ่มจัดการเดิม
 - **ไฟล์หลัก:** `src/pages/FranchiseStockManagement.jsx`, `docs/PROGRESS_LOG.md`

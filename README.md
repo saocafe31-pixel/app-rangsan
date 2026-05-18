@@ -2,7 +2,14 @@
 
 แอปร้านกาแฟ / สั่งซื้อ / แอดมิน / แฟรนไชส์ — **React (Vite)** + **Supabase**
 
+**Repository:** https://github.com/saocafe31-pixel/app-rangsan
+
 ## เริ่มต้นอย่างเร็ว (หลังโคลน)
+
+```bash
+git clone https://github.com/saocafe31-pixel/app-rangsan.git
+cd app-rangsan
+```
 
 ```bash
 npm install
