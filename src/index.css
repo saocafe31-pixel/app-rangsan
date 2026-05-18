@@ -1,0 +1,147 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ตัวอักษรทั้งแอปเล็กลง 2px (base 16px → 14px) */
+html { font-size: 14px; }
+
+body { 
+  font-family: 'Prompt', sans-serif; 
+  background-color: #f3f4f6; 
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+.h-dvh { height: 100vh; height: 100dvh; }
+.min-h-dvh { min-height: 100vh; min-height: 100dvh; }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+.fade-in { animation: fadeIn 0.3s ease-out; }
+@keyframes fadeIn { 
+  from { opacity: 0; transform: translateY(5px); } 
+  to { opacity: 1; transform: translateY(0); } 
+}
+
+.slide-up-modal { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes slideUp { 
+  from { transform: translateY(100%); } 
+  to { transform: translateY(0); } 
+}
+
+.sidebar-active { 
+  background-color: #374151; 
+  border-left: 4px solid #ffffff; 
+  color: white !important; 
+  font-weight: 600; 
+}
+
+.sidebar-item { 
+  transition: all 0.2s ease; 
+  border-left: 4px solid transparent; 
+}
+
+.sidebar-item:hover { 
+  background-color: #1f2937; 
+  color: white; 
+}
+
+/* Safe Area for Mobile */
+.pt-safe { padding-top: env(safe-area-inset-top); }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Hide browser default password toggle */
+input[type="password"]::-webkit-credentials-auto-fill-button,
+input[type="password"]::-webkit-strong-password-auto-fill-button {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+input[type="password"]::-ms-reveal {
+  display: none !important;
+}
+
+/* ซ่อนเนื้อหาที่เตรียมพิมพ์บนหน้าจอ (อยู่นอก #root) */
+#print-section {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+@media print {
+  @page { size: auto; margin: 10mm; }
+  body { background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body * { visibility: hidden; }
+  #print-section, #print-section * { visibility: visible; }
+  #print-section {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    clip: auto !important;
+    background: white;
+    z-index: 9999;
+  }
+  #root { display: none; }
+}
+
+/* Loading Screen Animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-20px) scale(1.05); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(0.95); }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-10px); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(-5px); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes dotPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 0.7; }
+}
+
+@keyframes gradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.loading-float { animation: float 3s ease-in-out infinite; }
+.loading-pulse { animation: pulse 2s ease-in-out infinite; }
+.loading-bounce { animation: bounce 2s ease-in-out infinite; }
+.loading-spin { animation: spin 1s linear infinite; }
+.loading-dot { animation: dotPulse 1.4s ease-in-out infinite; }
+.loading-dot:nth-child(2) { animation-delay: 0.2s; }
+.loading-dot:nth-child(3) { animation-delay: 0.4s; }
+.gradient-bg {
+  background: linear-gradient(-45deg, #1f2937, #374151, #4b5563, #6b7280);
+  background-size: 400% 400%;
+  animation: gradient 8s ease infinite;
+}

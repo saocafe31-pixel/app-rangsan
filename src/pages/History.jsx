@@ -1,0 +1,412 @@
+import { useState, useEffect, useMemo } from 'react'
+import { useOrders } from '../hooks/useOrders'
+import { notificationService } from '../services/notificationService'
+import Header from '../components/common/Header'
+import Sidebar from '../components/common/Sidebar'
+import Icon from '../components/common/Icon'
+import LoadingSpinner from '../components/common/LoadingSpinner'
+import DateRangeFilter from '../components/common/DateRangeFilter'
+import Swal from 'sweetalert2'
+import { getOrderItemDisplayName } from '../utils/orderBundleLineUtils'
+
+export default function History({ user }) {
+  const { orders, loading, refresh } = useOrders(user)
+  const [notifications, setNotifications] = useState([])
+  const [loadingNotifications, setLoadingNotifications] = useState(true)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [showAllDates, setShowAllDates] = useState(false)
+
+  const filteredOrders = useMemo(() => {
+    if (showAllDates || (!startDate && !endDate)) return orders
+    return orders.filter((order) => {
+      const raw = order.Timestamp || order.CreatedAt
+      if (!raw) return false
+      const itemDate = new Date(raw)
+      if (startDate) {
+        const start = new Date(startDate)
+        start.setHours(0, 0, 0, 0)
+        if (itemDate < start) return false
+      }
+      if (endDate) {
+        const end = new Date(endDate)
+        end.setHours(23, 59, 59, 999)
+        if (itemDate > end) return false
+      }
+      return true
+    })
+  }, [orders, startDate, endDate, showAllDates])
+
+  const copyTracking = async (tracking) => {
+    try {
+      await navigator.clipboard.writeText(tracking)
+      // You can add a toast notification here
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      fetchNotifications()
+    }
+  }, [user])
+
+  const fetchNotifications = async () => {
+    try {
+      setLoadingNotifications(true)
+      const data = await notificationService.getUserNotifications(user.email)
+      setNotifications(data || [])
+    } catch (error) {
+      console.error('Error fetching notifications:', error)
+    } finally {
+      setLoadingNotifications(false)
+    }
+  }
+
+  const handleMarkAsRead = async (notificationId) => {
+    try {
+      await notificationService.markAsRead(notificationId)
+      setNotifications(prev =>
+        prev.map(n => (n.ID === notificationId || n.id === notificationId) ? { ...n, Read: true } : n)
+      )
+      window.dispatchEvent(new CustomEvent('notificationRead'))
+    } catch (error) {
+      console.error('Error marking notification as read:', error)
+    }
+  }
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      await notificationService.markAllAsRead(user.email)
+      setNotifications(prev => prev.map(n => ({ ...n, Read: true })))
+      window.dispatchEvent(new CustomEvent('notificationRead'))
+      Swal.fire({
+        icon: 'success',
+        title: 'ทำเครื่องหมายว่าอ่านแล้ว',
+        timer: 1500,
+        showConfirmButton: false
+      })
+    } catch (error) {
+      console.error('Error marking all as read:', error)
+      Swal.fire({
+        icon: 'error',
+        title: 'เกิดข้อผิดพลาด',
+        text: 'ไม่สามารถทำเครื่องหมายว่าอ่านแล้วได้'
+      })
+    }
+  }
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-'
+    try {
+      const date = new Date(dateStr)
+      return date.toLocaleDateString('th-TH', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })
+    } catch (e) {
+      return dateStr
+    }
+  }
+
+  const formatNotificationDate = (dateStr) => {
+    if (!dateStr) return ''
+    try {
+      const date = new Date(dateStr)
+      const now = new Date()
+      const diffMs = now - date
+      const diffMins = Math.floor(diffMs / 60000)
+      const diffHours = Math.floor(diffMs / 3600000)
+      const diffDays = Math.floor(diffMs / 86400000)
+
+      if (diffMins < 1) return 'เมื่อสักครู่'
+      if (diffMins < 60) return `${diffMins} นาทีที่แล้ว`
+      if (diffHours < 24) return `${diffHours} ชั่วโมงที่แล้ว`
+      if (diffDays < 7) return `${diffDays} วันที่แล้ว`
+      
+      return date.toLocaleDateString('th-TH', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch (e) {
+      return dateStr
+    }
+  }
+
+  const unreadNotifications = notifications.filter(n => !n.Read && !n.read)
+
+  if (loading) {
+    return <LoadingSpinner />
+  }
+
+  const hasLeftSidebar = user?.role === 'admin' || user?.userType === 'franchise' || user?.customerType === 'franchise'
+
+  return (
+    <div className="min-h-screen bg-gray-50 pb-20">
+      <Header user={user} cartItemCount={0} onCartClick={() => {}} />
+      <div className="flex">
+        {hasLeftSidebar && <Sidebar user={user} />}
+        <div className={`flex-1 ${hasLeftSidebar ? 'ml-0 md:ml-64' : ''} p-6 pt-20`}>
+          <div className="max-w-7xl mx-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h1 className="text-2xl font-bold text-gray-900">ประวัติการสั่งซื้อ</h1>
+              <button
+            onClick={refresh}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-bold transition"
+          >
+            <Icon icon="fa-sync-alt" className="text-gray-700" />
+            <span className="text-gray-700">รีเฟรช</span>
+              </button>
+            </div>
+
+            {/* กรองช่วงวันที่ (เหมือนหน้าประวัติการใช้เครดิต) */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+              <div className="flex gap-4 flex-wrap">
+                <div className="min-w-[200px]">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">วันที่เริ่มต้น</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      setStartDate(e.target.value)
+                      setShowAllDates(false)
+                    }}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                  />
+                </div>
+                <div className="min-w-[200px]">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">วันที่สิ้นสุด</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    min={startDate}
+                    onChange={(e) => {
+                      setEndDate(e.target.value)
+                      setShowAllDates(false)
+                    }}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                  />
+                </div>
+                <DateRangeFilter
+                  layout="buttonsOnly"
+                  labelInline
+                  start={startDate}
+                  end={endDate}
+                  onStartChange={(v) => {
+                    setStartDate(v)
+                    setShowAllDates(false)
+                  }}
+                  onEndChange={(v) => {
+                    setEndDate(v)
+                    setShowAllDates(false)
+                  }}
+                  showAllDates={showAllDates}
+                  onShowAllDatesChange={setShowAllDates}
+                  extraButtons={
+                    (startDate || endDate || showAllDates) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStartDate('')
+                          setEndDate('')
+                          setShowAllDates(false)
+                        }}
+                        className="px-4 py-2.5 bg-gray-200 hover:bg-gray-300 rounded-lg font-bold text-gray-700 transition"
+                      >
+                        ล้างตัวกรอง
+                      </button>
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Notifications Section */}
+        {notifications.length > 0 && (
+          <div className="mb-6 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Icon icon="fa-bell" className="text-emerald-600" />
+                แจ้งเตือน
+                {unreadNotifications.length > 0 && (
+                  <span className="bg-red-600 text-white text-xs font-bold rounded-full px-2 py-1">
+                    {unreadNotifications.length}
+                  </span>
+                )}
+              </h2>
+              {unreadNotifications.length > 0 && (
+                <button
+                  onClick={handleMarkAllAsRead}
+                  className="text-sm text-emerald-600 hover:text-emerald-700 font-medium"
+                >
+                  ทำเครื่องหมายว่าอ่านแล้วทั้งหมด
+                </button>
+              )}
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {notifications.map((notification) => {
+                const isRead = notification.Read || notification.read || false
+                const notificationId = notification.ID || notification.id
+                
+                return (
+                  <div
+                    key={notificationId}
+                    className={`p-3 rounded-lg border transition ${
+                      !isRead 
+                        ? 'bg-blue-50 border-blue-200' 
+                        : 'bg-gray-50 border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          {!isRead && (
+                            <span className="w-2 h-2 bg-emerald-600 rounded-full"></span>
+                          )}
+                          <h3 className={`text-sm font-bold ${!isRead ? 'text-gray-900' : 'text-gray-700'}`}>
+                            {notification.Title || notification.title || 'แจ้งเตือน'}
+                          </h3>
+                        </div>
+                        <p className="text-xs text-gray-600 mb-1">
+                          {notification.Message || notification.message || ''}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {formatNotificationDate(notification.CreatedAt || notification.created_at || notification.createdAt)}
+                        </p>
+                      </div>
+                      {!isRead && (
+                        <button
+                          onClick={() => handleMarkAsRead(notificationId)}
+                          className="flex-shrink-0 text-emerald-600 hover:text-emerald-700 text-xs px-2 py-1 rounded hover:bg-emerald-50 transition"
+                          title="ทำเครื่องหมายว่าอ่านแล้ว"
+                        >
+                          <Icon icon="fa-check" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {orders.length === 0 ? (
+          <div className="text-center py-20 text-gray-400 bg-white rounded-xl border border-dashed">
+            <Icon icon="fa-shopping-bag" className="text-5xl mb-4 opacity-50" />
+            <p>ยังไม่มีข้อมูลรายการสั่งซื้อ</p>
+          </div>
+        ) : filteredOrders.length === 0 ? (
+          <div className="text-center py-20 text-gray-400 bg-white rounded-xl border border-dashed">
+            <Icon icon="fa-shopping-bag" className="text-5xl mb-4 opacity-50" />
+            <p>ไม่พบรายการในช่วงวันที่ที่เลือก</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredOrders.map((order) => (
+              <div key={order.ID} className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex justify-between items-start mb-3 border-b pb-3">
+                  <div>
+                    <h3 className="font-bold text-gray-900 uppercase">{order.OrderID || order.ID}</h3>
+                    <p className="text-xs text-gray-400">{formatDate(order.Timestamp || order.CreatedAt)}</p>
+                  </div>
+                  <span
+                    className={`px-3 py-1 rounded-full text-[10px] font-bold ${
+                      order.Status === 'รอตรวจสอบ'
+                        ? 'bg-yellow-100 text-yellow-800'
+                        : order.Status === 'จัดส่งแล้ว'
+                        ? 'bg-green-100 text-green-800'
+                        : 'bg-gray-100 text-gray-800'
+                    }`}
+                  >
+                    {order.Status}
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 mb-3">
+                  {order.Items && order.Items.length > 0 ? (
+                    order.Items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between text-xs text-gray-600">
+                        <span>{getOrderItemDisplayName(item.name)} x{item.qty}</span>
+                        <span className="font-medium text-gray-800 font-bold">
+                          ฿{(item.price * item.qty).toLocaleString()}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-gray-400">ไม่มีรายการสินค้า</p>
+                  )}
+                </div>
+
+                {order.Status === 'จัดส่งแล้ว' && (order.TrackingNo || order.Tracking) && (
+                  <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Icon icon="fa-truck" className="text-blue-600" />
+                      <span className="font-bold text-blue-900">เลขที่พัสดุ:</span>
+                      <span
+                        className="font-bold text-blue-700 cursor-pointer hover:text-blue-900 hover:underline transition"
+                        onClick={() => copyTracking(order.TrackingNo || order.Tracking)}
+                        title="คลิกเพื่อคัดลอกเลขที่พัสดุ"
+                      >
+                        {order.TrackingNo || order.Tracking}
+                      </span>
+                      <Icon icon="fa-copy" className="text-blue-500 text-xs" />
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2 pt-2 border-t border-dashed">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-gray-600">วิธีการชำระเงิน:</span>
+                    <span className="font-bold text-gray-800">
+                      {order.PaymentMethod === 'credit' ? (
+                        <span className="flex items-center gap-1">
+                          <Icon icon="fa-wallet" className="text-emerald-600" />
+                          <span className="text-emerald-600">เครดิต</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Icon icon="fa-university" className="text-blue-600" />
+                          <span className="text-blue-600">โอนเงิน</span>
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-gray-600">วิธีการรับสินค้า:</span>
+                    <span className="font-bold text-gray-800">
+                      {order.ShippingMethod === 'pickup' ? (
+                        <span className="flex items-center gap-1">
+                          <Icon icon="fa-store" className="text-orange-600" />
+                          <span className="text-orange-600">รับเอง</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Icon icon="fa-truck" className="text-purple-600" />
+                          <span className="text-purple-600">จัดส่ง</span>
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between font-bold text-base pt-2 border-t border-gray-200">
+                    <span>ยอดสุทธิ</span>
+                    <span className="text-emerald-700 font-bold text-lg">
+                      ฿{Number(order.Total || 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,48 @@
+{
+  "name": "app-rangsan",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "supabase": "supabase",
+    "db:login": "supabase login",
+    "db:link": "supabase link",
+    "db:push": "supabase db push",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:shipping": "vitest run src/utils/shippingRateUtils.test.js",
+    "test:coverage": "vitest run --coverage",
+    "vercel": "vercel",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.38.4",
+    "bcryptjs": "^3.0.3",
+    "chart.js": "^4.5.1",
+    "html5-qrcode": "^2.3.8",
+    "promptpay-qr": "^0.5.0",
+    "qrcode": "^1.5.3",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "sweetalert2": "^11.10.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "jsdom": "^28.0.0",
+    "postcss": "^8.4.32",
+    "supabase": "^2.76.12",
+    "tailwindcss": "^3.3.6",
+    "vercel": "^50.34.3",
+    "vite": "^5.0.8",
+    "vitest": "^4.0.18"
+  }
+}

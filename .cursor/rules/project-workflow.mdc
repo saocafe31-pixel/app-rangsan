@@ -1,0 +1,37 @@
+---
+description: กฎบังคับ workflow โปรเจกต์ APP RANGSAN สำหรับ Agent และผู้ร่วมพัฒนา
+alwaysApply: true
+---
+
+# Project workflow (บังคับ)
+
+## ก่อนลงมือ
+
+- อ่าน **[AGENTS.md](../../AGENTS.md)** และ **[docs/PROJECT_WORKFLOW_REPORT.md](../../docs/PROJECT_WORKFLOW_REPORT.md)** เมื่องานกระทบหลายไฟล์ โครงสร้าง repo หรือ flow ไม่ชัด
+- งานที่เกี่ยวกับโค้ดแอป: อ่าน **[docs/DEVELOPER_GUIDE.md](../../docs/DEVELOPER_GUIDE.md)** อย่างน้อยส่วนโครงสร้างและ data layer
+
+## Scope และขอบเขต
+
+- ระบุประเภทงาน: **feat** | **fix** | **docs** | **chore**
+- **docs/chore:** ห้ามเปลี่ยนพฤติกรรมระบบปลายทางของผู้ใช้โดยไม่ตั้งใจ; จำกัดการแก้ไขให้ตรงคำขอ
+- แก้เฉพาะไฟล์และบรรทัดที่จำเป็น — หลีกเลี่ยง refactor นอกขอบเขต
+
+## เอกสารและลิงก์
+
+- เมื่อเพิ่มหรือแก้ markdown ที่มีลิงก์ relative (`./` `../`) ต้อง **ตรวจว่า path ชี้ไฟล์ที่มีใน repo**
+- เมื่อเพิ่มเอกสารหลักใหม่: อัปเดต **[README.md](../../README.md)** และ/หรือ **[docs/README.md](../../docs/README.md)** ให้ผู้อ่านตามต่อได้ (รวม `docs/PROGRESS_LOG.md` ถ้าเปลี่ยนตำแหน่งหรือแยกไฟล์ log)
+
+## ความปลอดภัยและ env
+
+- ไม่ commit ค่าลับหรือ `.env.local` — อ้างอิง `.env.example` และ **ENV_SETUP.md** เมื่อเกี่ยวข้อง
+
+## Progress log (บังคับ)
+
+- เมื่อ **จบรอบงาน** และมีการแก้/เพิ่ม/ลบไฟล์ใน repo: ต้องเพิ่มรายการใน **[docs/PROGRESS_LOG.md](../../docs/PROGRESS_LOG.md)** ตามรูปแบบในไฟล์นั้น (ใส่ทันทีใต้ `<!-- progress-log-entries -->` เพื่อให้รายการใหม่อยู่ด้านบน)
+- **ยกเว้น:** สำรวจอย่างเดียวโดยไม่เปลี่ยนไฟล์ใน workspace
+- **ก่อนปิดงาน:** ลบไฟล์ชั่วคราวหรือไฟล์ทดลองที่สร้างระหว่างทำงานและ **ไม่ได้ตั้งใจ** เก็บใน repo
+
+## การตรวจสอบหลังแก้
+
+- งานที่ส่งมอบหรือก่อน deploy: ทำตาม **[docs/PROJECT_VERIFICATION.md](../../docs/PROJECT_VERIFICATION.md)** ตามความเหมาะสม
+- งานเอกสารล้วน: ตรวจลิงก์ภายในโปรเจกต์ตาม PROJECT_WORKFLOW_REPORT
