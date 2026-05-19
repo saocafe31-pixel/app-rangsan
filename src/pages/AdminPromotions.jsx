@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../utils/supabase'
 import { productService } from '../services/productService'
 import Header from '../components/common/Header'
@@ -6,6 +6,22 @@ import Sidebar from '../components/common/Sidebar'
 import Icon from '../components/common/Icon'
 import Swal from 'sweetalert2'
 import LoadingSpinner from '../components/common/LoadingSpinner'
+import {
+  PROMOTION_TYPE_LABELS,
+  computePromotionMoneyDiscount,
+  formatPromotionCondition,
+  promotionDateInputToIsoRange
+} from '../utils/promotionUtils'
+
+const PROMOTION_TYPE_HELP = {
+  buy_x_get_y: 'เมื่อซื้อสินค้า X ครบจำนวนที่กำหนด ระบบเพิ่มสินค้าแถม Y ในตะกร้าอัตโนมัติ (หน้าชำระเงิน)',
+  discount_percentage: 'หัก % จากยอดสินค้า X ในตะกร้า (เฉพาะชิ้นที่ต้องจ่าย ไม่รวมแถม)',
+  discount_fixed: 'หักจำนวนเงินต่อชิ้น จากสินค้า X (เช่น ลด 10 บาท/ชิ้น × จำนวนที่ซื้อ)',
+  target_unit_price:
+    'กำหนดราคาขายต่อชิ้น (เช่น 290 บาท/ชิ้น) — ส่วนลด = (ราคาปกติ − ราคาโปร) × จำนวน',
+  second_item_discount:
+    'ซื้อสินค้า X อย่างน้อย 2 ชิ้น — ชิ้นที่ 2, 4, 6 … ได้ส่วนลด (บาท/ชิ้น หรือ %) ตามที่ตั้งไว้'
+}
 
 export default function AdminPromotions({ user }) {
   const [promotions, setPromotions] = useState([])
@@ -33,7 +49,10 @@ export default function AdminPromotions({ user }) {
     ValidFrom: '',
     ValidUntil: '',
     Status: 'active',
-    Description: ''
+    Description: '',
+    UsageLimit: 0,
+    TotalUsageLimit: 0,
+    secondItemDiscountMode: 'percent'
   })
 
   // Helper function to handle number input - removes leading zero when user starts typing
@@ -116,7 +135,10 @@ export default function AdminPromotions({ user }) {
       ValidFrom: '',
       ValidUntil: '',
       Status: 'active',
-      Description: ''
+      Description: '',
+      UsageLimit: 0,
+      TotalUsageLimit: 0,
+      secondItemDiscountMode: 'percent'
     })
     setShowModal(true)
   }
@@ -139,7 +161,13 @@ export default function AdminPromotions({ user }) {
       ValidFrom: promotion.ValidFrom ? promotion.ValidFrom.toString().split('T')[0] : '',
       ValidUntil: promotion.ValidUntil ? promotion.ValidUntil.toString().split('T')[0] : '',
       Status: promotion.Status || 'active',
-      Description: promotion.Description || ''
+      Description: promotion.Description || '',
+      UsageLimit: promotion.UsageLimit || 0,
+      TotalUsageLimit: promotion.TotalUsageLimit || 0,
+      secondItemDiscountMode:
+        promotion.Type === 'second_item_discount' && !(Number(promotion.DiscountPercentage) > 0)
+          ? 'fixed'
+          : 'percent'
     })
     setShowModal(true)
   }
@@ -196,27 +224,78 @@ export default function AdminPromotions({ user }) {
         Swal.fire({
           icon: 'warning',
           title: 'กรุณากรอกข้อมูล',
-          text: 'กรุณากรอกจำนวนเงินส่วนลดที่มากกว่า 0'
+          text: 'กรุณากรอกจำนวนเงินส่วนลดต่อชิ้นที่มากกว่า 0'
+        })
+        return
+      }
+    } else if (promotionForm.Type === 'target_unit_price') {
+      if (promotionForm.DiscountAmount < 0) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'กรุณากรอกข้อมูล',
+          text: 'กรุณากรอกราคาพิเศษต่อชิ้น (0 = ฟรี)'
+        })
+        return
+      }
+    } else if (promotionForm.Type === 'second_item_discount') {
+      if (promotionForm.secondItemDiscountMode === 'percent') {
+        if (promotionForm.DiscountPercentage <= 0 || promotionForm.DiscountPercentage > 100) {
+          Swal.fire({
+            icon: 'warning',
+            title: 'ข้อมูลไม่ถูกต้อง',
+            text: 'กรุณากรอกเปอร์เซ็นต์ส่วนลดชิ้นที่ 2 ระหว่าง 1–100%'
+          })
+          return
+        }
+      } else if (promotionForm.DiscountAmount <= 0) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'กรุณากรอกข้อมูล',
+          text: 'กรุณากรอกจำนวนเงินส่วนลดต่อชิ้นที่ 2 ที่มากกว่า 0'
         })
         return
       }
     }
 
+    if (promotionForm.ValidFrom && promotionForm.ValidUntil && promotionForm.ValidFrom > promotionForm.ValidUntil) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'วันที่ไม่ถูกต้อง',
+        text: 'วันที่เริ่มต้นต้องไม่หลังวันที่สิ้นสุด'
+      })
+      return
+    }
+
     try {
+      const isSecondItem = promotionForm.Type === 'second_item_discount'
+      const secondPercent =
+        isSecondItem && promotionForm.secondItemDiscountMode === 'percent'
+          ? Number(promotionForm.DiscountPercentage) || 0
+          : 0
+      const secondFixed =
+        isSecondItem && promotionForm.secondItemDiscountMode === 'fixed'
+          ? Number(promotionForm.DiscountAmount) || 0
+          : 0
+
       const promotionData = {
         Name: promotionForm.Name.trim(),
         Type: promotionForm.Type,
         ProductID: promotionForm.ProductID.trim(),
+        GetProductID: promotionForm.GetProductID?.trim() || null,
         BuyQuantity: Number(promotionForm.BuyQuantity) || 0,
         GetQuantity: Number(promotionForm.GetQuantity) || 0,
-        DiscountPercentage: Number(promotionForm.DiscountPercentage) || 0,
-        DiscountAmount: Number(promotionForm.DiscountAmount) || 0,
+        DiscountPercentage: isSecondItem
+          ? secondPercent
+          : Number(promotionForm.DiscountPercentage) || 0,
+        DiscountAmount: isSecondItem ? secondFixed : Number(promotionForm.DiscountAmount) || 0,
         MinPurchase: Number(promotionForm.MinPurchase) || 0,
         MaxDiscount: Number(promotionForm.MaxDiscount) || 0,
-        ValidFrom: promotionForm.ValidFrom ? new Date(promotionForm.ValidFrom).toISOString() : null,
-        ValidUntil: promotionForm.ValidUntil ? new Date(promotionForm.ValidUntil).toISOString() : null,
+        ValidFrom: promotionDateInputToIsoRange(promotionForm.ValidFrom, 'from'),
+        ValidUntil: promotionDateInputToIsoRange(promotionForm.ValidUntil, 'until'),
         Status: promotionForm.Status,
-        Description: promotionForm.Description || ''
+        Description: promotionForm.Description || '',
+        UsageLimit: Number(promotionForm.UsageLimit) || 0,
+        TotalUsageLimit: Number(promotionForm.TotalUsageLimit) || 0
       }
 
       if (editingPromotion) {
@@ -364,13 +443,30 @@ export default function AdminPromotions({ user }) {
     }
   }
 
-  const getTypeLabel = (type) => {
-    const typeMap = {
-      'buy_x_get_y': 'ซื้อ X แถม Y',
-      'discount_percentage': 'ส่วนลดเปอร์เซ็นต์',
-      'discount_fixed': 'ส่วนลดจำนวนเงิน'
-    }
-    return typeMap[type] || type
+  const getTypeLabel = (type) => PROMOTION_TYPE_LABELS[type] || type
+
+  const handlePromotionTypeChange = (nextType) => {
+    setPromotionForm((f) => ({
+      ...f,
+      Type: nextType,
+      BuyQuantity: nextType === 'buy_x_get_y' ? f.BuyQuantity : 0,
+      GetQuantity: nextType === 'buy_x_get_y' ? f.GetQuantity : 0,
+      GetProductID: nextType === 'buy_x_get_y' ? f.GetProductID : '',
+      DiscountPercentage:
+        nextType === 'discount_percentage' || nextType === 'second_item_discount'
+          ? f.DiscountPercentage
+          : 0,
+      MaxDiscount:
+        nextType === 'discount_percentage' || nextType === 'second_item_discount' ? f.MaxDiscount : 0,
+      DiscountAmount:
+        nextType === 'discount_fixed' ||
+        nextType === 'target_unit_price' ||
+        nextType === 'second_item_discount'
+          ? f.DiscountAmount
+          : 0,
+      secondItemDiscountMode:
+        nextType === 'second_item_discount' ? f.secondItemDiscountMode || 'percent' : 'percent'
+    }))
   }
 
   const getSelectedProduct = () => {
@@ -398,6 +494,43 @@ export default function AdminPromotions({ user }) {
       (product.name || '').toLowerCase().includes(searchLower)
     )
   })
+
+  const PREVIEW_QTY = 2
+  const promotionCheckoutPreview = useMemo(() => {
+    const product = getSelectedProduct()
+    const t = promotionForm.Type
+    if (
+      !product ||
+      !['discount_percentage', 'discount_fixed', 'target_unit_price', 'second_item_discount'].includes(t)
+    ) {
+      return null
+    }
+    const isSecond = t === 'second_item_discount'
+    const promo = {
+      id: 'preview',
+      Type: t,
+      DiscountPercentage:
+        isSecond && promotionForm.secondItemDiscountMode === 'fixed'
+          ? 0
+          : Number(promotionForm.DiscountPercentage) || 0,
+      DiscountAmount:
+        isSecond && promotionForm.secondItemDiscountMode === 'percent'
+          ? 0
+          : Number(promotionForm.DiscountAmount) || 0,
+      MaxDiscount: Number(promotionForm.MaxDiscount) || 0
+    }
+    const unitPrice = Number(product.price) || 0
+    const item = { id: product.id, price: unitPrice, qty: PREVIEW_QTY }
+    const discount = computePromotionMoneyDiscount(promo, item)
+    const subtotal = unitPrice * PREVIEW_QTY
+    return {
+      qty: PREVIEW_QTY,
+      unitPrice,
+      subtotal,
+      discount,
+      payAfter: Math.max(0, subtotal - discount)
+    }
+  }, [promotionForm, products])
 
   if (loading) {
     return <LoadingSpinner />
@@ -515,8 +648,16 @@ export default function AdminPromotions({ user }) {
                                 )}
                                 {type === 'discount_fixed' && (
                                   <>
-                                    <div>ส่วนลด ฿{Number(promotion.DiscountAmount || 0).toLocaleString()}</div>
+                                    <div>ลด ฿{Number(promotion.DiscountAmount || 0).toLocaleString()} ต่อชิ้น</div>
                                   </>
+                                )}
+                                {type === 'target_unit_price' && (
+                                  <>
+                                    <div>ราคา ฿{Number(promotion.DiscountAmount || 0).toLocaleString()} / ชิ้น</div>
+                                  </>
+                                )}
+                                {type === 'second_item_discount' && (
+                                  <div>{formatPromotionCondition(promotion)}</div>
                                 )}
                                 {promotion.MinPurchase > 0 && (
                                   <div className="text-xs">ซื้อขั้นต่ำ: ฿{Number(promotion.MinPurchase).toLocaleString()}</div>
@@ -529,11 +670,16 @@ export default function AdminPromotions({ user }) {
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                               {formatDate(promotion.ValidUntil)}
                             </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-center">
+                            <td className="px-6 py-4 whitespace-nowrap text-center text-xs">
                               <div className="text-sm font-semibold text-gray-900">
-                                {(promotion.UsageCount || 0).toLocaleString()}
+                                ใช้แล้ว {(promotion.UsageCount || 0).toLocaleString()} ครั้ง
                               </div>
-                              <div className="text-xs text-gray-500">ครั้ง</div>
+                              {(promotion.TotalUsageLimit || 0) > 0 && (
+                                <div className="text-gray-500">รวมสูงสุด {promotion.TotalUsageLimit} ครั้ง</div>
+                              )}
+                              {(promotion.UsageLimit || 0) > 0 && (
+                                <div className="text-gray-500">ต่อคน {promotion.UsageLimit} ครั้ง</div>
+                              )}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center">
                               <button
@@ -613,13 +759,20 @@ export default function AdminPromotions({ user }) {
                 </label>
                 <select
                   value={promotionForm.Type}
-                  onChange={(e) => setPromotionForm({ ...promotionForm, Type: e.target.value })}
+                  onChange={(e) => handlePromotionTypeChange(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
                 >
                   <option value="buy_x_get_y">ซื้อ X แถม Y</option>
                   <option value="discount_percentage">ส่วนลดเปอร์เซ็นต์</option>
-                  <option value="discount_fixed">ส่วนลดจำนวนเงิน</option>
+                  <option value="discount_fixed">ส่วนลดต่อชิ้น (บาท)</option>
+                  <option value="target_unit_price">ราคาพิเศษต่อชิ้น (บาท)</option>
+                  <option value="second_item_discount">ชิ้นที่ 2 ลด (บาท/%)</option>
                 </select>
+                {PROMOTION_TYPE_HELP[promotionForm.Type] && (
+                  <p className="mt-2 text-xs leading-snug text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                    {PROMOTION_TYPE_HELP[promotionForm.Type]}
+                  </p>
+                )}
               </div>
 
               {/* ProductID */}
@@ -882,8 +1035,11 @@ export default function AdminPromotions({ user }) {
               {promotionForm.Type === 'discount_fixed' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    จำนวนเงินส่วนลด (บาท) *
+                    ส่วนลดต่อชิ้น (บาท) *
                   </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    หักต่อชิ้นที่ซื้อ (เช่น ลด 10 บาท × 3 ชิ้น = ลด 30 บาท) — ไม่ใช่ครั้งเดียวต่อออเดอร์
+                  </p>
                   <input
                     type="number"
                     min="0.01"
@@ -910,6 +1066,199 @@ export default function AdminPromotions({ user }) {
                   />
                 </div>
               )}
+
+              {promotionForm.Type === 'target_unit_price' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    ราคาพิเศษต่อชิ้น (บาท) *
+                  </label>
+                  <p className="text-xs text-gray-500 mb-2">
+                    ใช้เมื่อต้องการขายในราคาเดียว เช่น ลดเหลือ 290 บาท/ชิ้น (ส่วนลดคำนวณจากราคาปกติ − ราคานี้)
+                  </p>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={promotionForm.DiscountAmount === 0 ? '' : promotionForm.DiscountAmount}
+                    onChange={(e) => {
+                      const inputValue = e.target.value
+                      if (inputValue === '' || inputValue === null || inputValue === undefined) {
+                        setPromotionForm({ ...promotionForm, DiscountAmount: 0 })
+                        return
+                      }
+                      const cleaned = inputValue.replace(/^0+(?=\d)/, '') || inputValue
+                      const numValue = parseFloat(cleaned) || 0
+                      setPromotionForm({ ...promotionForm, DiscountAmount: numValue })
+                    }}
+                    onFocus={(e) => {
+                      if (promotionForm.DiscountAmount === 0) {
+                        e.target.select()
+                      }
+                    }}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    placeholder="เช่น 290"
+                  />
+                  {getSelectedProduct() && (
+                    <p className="mt-2 text-xs text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                      ราคาปกติสินค้า X: ฿{Number(getSelectedProduct().price || 0).toLocaleString()} / ชิ้น
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {promotionForm.Type === 'second_item_discount' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">รูปแบบส่วนลดชิ้นที่ 2 *</label>
+                    <div className="flex gap-4 text-sm mt-1">
+                      <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="secondItemDiscountMode"
+                          checked={promotionForm.secondItemDiscountMode === 'percent'}
+                          onChange={() =>
+                            setPromotionForm((f) => ({
+                              ...f,
+                              secondItemDiscountMode: 'percent',
+                              DiscountAmount: 0
+                            }))
+                          }
+                        />
+                        เปอร์เซ็นต์ (%)
+                      </label>
+                      <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="secondItemDiscountMode"
+                          checked={promotionForm.secondItemDiscountMode === 'fixed'}
+                          onChange={() =>
+                            setPromotionForm((f) => ({
+                              ...f,
+                              secondItemDiscountMode: 'fixed',
+                              DiscountPercentage: 0,
+                              MaxDiscount: 0
+                            }))
+                          }
+                        />
+                        จำนวนเงิน (บาท/ชิ้น)
+                      </label>
+                    </div>
+                  </div>
+                  {promotionForm.secondItemDiscountMode === 'percent' ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          เปอร์เซ็นต์ลดชิ้นที่ 2 (%) *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          step="0.01"
+                          value={
+                            promotionForm.DiscountPercentage === 0
+                              ? ''
+                              : promotionForm.DiscountPercentage
+                          }
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setPromotionForm({
+                              ...promotionForm,
+                              DiscountPercentage: v === '' ? 0 : parseFloat(v) || 0
+                            })
+                          }}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                          placeholder="เช่น 50"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          ส่วนลดสูงสุด (บาท) (0 = ไม่จำกัด)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={promotionForm.MaxDiscount === 0 ? '' : promotionForm.MaxDiscount}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setPromotionForm({
+                              ...promotionForm,
+                              MaxDiscount: v === '' ? 0 : parseFloat(v) || 0
+                            })
+                          }}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                          placeholder="100"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        ลดต่อชิ้นที่ 2,4,6… (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={promotionForm.DiscountAmount === 0 ? '' : promotionForm.DiscountAmount}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setPromotionForm({
+                            ...promotionForm,
+                            DiscountAmount: v === '' ? 0 : parseFloat(v) || 0
+                          })
+                        }}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                        placeholder="เช่น 30"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    จำกัดครั้งต่อคน (0 = ไม่จำกัด)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={promotionForm.UsageLimit === 0 ? '' : promotionForm.UsageLimit}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setPromotionForm({
+                        ...promotionForm,
+                        UsageLimit: v === '' ? 0 : parseInt(v, 10) || 0
+                      })
+                    }}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    placeholder="เช่น 1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    จำกัดครั้งรวมทั้งโปร (0 = ไม่จำกัด)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={promotionForm.TotalUsageLimit === 0 ? '' : promotionForm.TotalUsageLimit}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setPromotionForm({
+                        ...promotionForm,
+                        TotalUsageLimit: v === '' ? 0 : parseInt(v, 10) || 0
+                      })
+                    }}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    placeholder="เช่น 100"
+                  />
+                </div>
+              </div>
 
               {/* MinPurchase */}
               <div>
@@ -960,6 +1309,7 @@ export default function AdminPromotions({ user }) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   วันที่สิ้นสุด
                 </label>
+                <p className="text-xs text-gray-500 mb-1">นับถึงสิ้นวัน (23:59) ของวันที่เลือก</p>
                 <input
                   type="date"
                   value={promotionForm.ValidUntil}
@@ -982,6 +1332,20 @@ export default function AdminPromotions({ user }) {
                   <option value="inactive">ปิดใช้งาน</option>
                 </select>
               </div>
+
+              {promotionCheckoutPreview && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
+                  <p className="font-semibold mb-1">ตัวอย่างบนหน้าชำระเงิน ({promotionCheckoutPreview.qty} ชิ้น)</p>
+                  <p>
+                    ราคาปกติ ฿{promotionCheckoutPreview.unitPrice.toLocaleString()}/ชิ้น ×{' '}
+                    {promotionCheckoutPreview.qty} = ฿{promotionCheckoutPreview.subtotal.toLocaleString()}
+                  </p>
+                  <p className="font-medium">
+                    ส่วนลดโปร (ประมาณ): ฿{promotionCheckoutPreview.discount.toLocaleString()} → จ่าย ฿
+                    {promotionCheckoutPreview.payAfter.toLocaleString()}
+                  </p>
+                </div>
+              )}
 
               {/* Description */}
               <div>
@@ -1018,3 +1382,4 @@ export default function AdminPromotions({ user }) {
     </div>
   )
 }
+

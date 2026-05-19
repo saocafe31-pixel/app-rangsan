@@ -482,23 +482,36 @@ export const orderService = {
       })
     }
     
+    const promoIdList =
+      orderData.promotions && Array.isArray(orderData.promotions)
+        ? [...new Set(orderData.promotions.map((p) => p.id).filter(Boolean))]
+        : []
+    const promoIdsSuffix =
+      promoIdList.length > 0 ? ` | PromoIds: ${promoIdList.join(',')}` : ''
+
     if (orderData.discountCode && orderData.discountAmount) {
       discountInfo = `Code: ${orderData.discountCode} (-${orderData.discountAmount}B)`
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (orderData.promotionDiscount && orderData.promotionDiscount > 0) {
       discountInfo = `Promotion: -${orderData.promotionDiscount}B`
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (orderData.discountAmount && Number(orderData.discountAmount) > 0) {
       discountInfo = `ส่วนลดแบ่งส่วน: -${orderData.discountAmount}B`
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (freeItemsInfo.length > 0) {
       discountInfo = `FreeItems: ${freeItemsInfo.join(',')}`
+      if (promoIdsSuffix) discountInfo += promoIdsSuffix
+    } else if (promoIdsSuffix) {
+      discountInfo = promoIdsSuffix.replace(/^\s*\|\s*/, '')
     }
 
     const tagParts = []

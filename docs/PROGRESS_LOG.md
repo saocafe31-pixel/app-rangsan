@@ -32,6 +32,20 @@
 
 <!-- progress-log-entries -->
 
+### 2026-05-19 — [feat] โปรชิ้นที่ 2 ลด + จำกัดการใช้โปร
+- **สรุป:** เพิ่มประเภท `second_item_discount`; ฟิลด์ `UsageLimit`/`TotalUsageLimit`/`UsageCount`; Checkout ตรวจโควต้าก่อนใช้โปร; บันทึก `PromoIds:` ใน DiscountInfo และนับต่อคน
+- **ไฟล์หลัก:** `supabase/migrations/20260519130000_promotion_second_item_usage_limits.sql`, `src/pages/AdminPromotions.jsx`, `src/pages/Checkout.jsx`, `src/services/orderService.js`, `src/utils/promotionUtils.test.js`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run build`, `vitest src/utils/promotionUtils.test.js` (10 tests)
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** รัน migration `20260519130000` (และ `20260519120000` ถ้ายังไม่รัน) บน Supabase
+
+### 2026-05-19 — [fix/feat] โปรโมชั่น: logic ตรง Checkout + UI แอดมิน
+- **สรุป:** รวม logic โปรใน `promotionUtils` — ส่วนลดเงินหักต่อชิ้น, ประเภท `target_unit_price` (ลดเหลือ X บาท/ชิ้น), วันสิ้นสุดนับถึงสิ้นวัน; Checkout ใช้ util เดียวกับแอดมิน; ฟอร์มแอดมินมีคำอธิบายและ preview
+- **ไฟล์หลัก:** `src/utils/promotionUtils.js`, `src/utils/promotionUtils.test.js`, `src/pages/Checkout.jsx`, `src/pages/AdminPromotions.jsx`, `supabase/migrations/20260519120000_promotion_target_unit_price.sql`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run build`, `vitest src/utils/promotionUtils.test.js` (9 tests)
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** รัน migration `20260519120000_promotion_target_unit_price.sql` บน Supabase ก่อนบันทึกโปรประเภท «ราคาพิเศษต่อชิ้น»
+
 ### 2026-05-18 — [docs] สรุปปิดรอบงานรายวัน
 - **สรุป:** รวบรวมงานพัฒนาและตั้งค่า repo ในวันเดียว — ฟีเจอร์แอดมิน/แฟรนไชส์, แก้การแสดงชื่อสินค้า (BUNDLE_IDS), เปิด Git ครั้งแรกและอัปโหลด GitHub
 - **ฟีเจอร์หลัก:** (1) `AdminReports` — ไม่นับออเดอร์ยกเลิก, จัดอันดับสินค้าขายดี qty/revenue, ดู/พิมพ์ใบกำกับ (2) `printService` + `AdminOrders` + `PackingModal` — ซ่อน BUNDLE_IDS (3) `AdminDashboard` — UI สินค้าขายดี/ลูกค้า (4) `StockManagement` + `FranchiseStockManagement` — มุมมอง ทั้งหมด / ตามซัพพลาย

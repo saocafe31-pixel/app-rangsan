@@ -31,6 +31,12 @@ import {
   eligibleSubtotalForCoupon
 } from '../utils/couponSupplierSplitUtils'
 import { computeBundleStockMoves, getEffectiveStock } from '../utils/orderBundleLineUtils'
+import {
+  computePromotionMoneyDiscount,
+  getPromotionPaidQty,
+  isPromotionWithinUsageLimits,
+  isPromotionWithinValidDates
+} from '../utils/promotionUtils'
 
 const PROMPTPAY_ID = '0105567121929'
 
@@ -404,6 +410,18 @@ export default function Checkout({ user }) {
 
       const subtotal = getSubtotal()
       console.log('[PROMO CHECK] Subtotal:', subtotal)
+
+      const needsPerUserUsageCheck = activePromotions.some((p) => (p.UsageLimit || 0) > 0)
+      let userPromoOrderRows = []
+      if (needsPerUserUsageCheck && user?.email) {
+        const { data: orderRows, error: usageError } = await supabase
+          .from('order')
+          .select('OrderID, DiscountInfo')
+          .eq('UserEmail', user.email)
+          .not('DiscountInfo', 'is', null)
+        if (!usageError && orderRows) userPromoOrderRows = orderRows
+      }
+
       const cartKeysPromo = getDistinctSupplierKeysInCart(cart)
       const multiSupPromo = cartKeysPromo.length > 1
       const hasCentralPromo = cartKeysPromo.some((k) => normalizeSupplierName(k) === CENTRAL_SUPPLIER_LABEL)
@@ -415,19 +433,13 @@ export default function Checkout({ user }) {
       for (const promotion of activePromotions) {
         console.log(`[PROMO CHECK] ===== Checking promotion: ${promotion.Name} (ID: ${promotion.id}, Type: ${promotion.Type}) =====`)
         
-        // ตรวจสอบวันที่ - ต้องผ่านทั้ง ValidFrom และ ValidUntil
-        const validFrom = promotion.ValidFrom ? new Date(promotion.ValidFrom) : null
-        const validUntil = promotion.ValidUntil ? new Date(promotion.ValidUntil) : null
-        
-        // ถ้ามี ValidFrom และยังไม่ถึงวันที่เริ่มต้น ให้ข้าม
-        if (validFrom && now < validFrom) {
-          console.log(`[PROMO CHECK] ${promotion.Name} - Not yet valid (starts ${validFrom.toISOString()}, now: ${now.toISOString()})`)
+        if (!isPromotionWithinValidDates(promotion, now)) {
+          console.log(`[PROMO CHECK] ${promotion.Name} - Outside valid date range`)
           continue
         }
-        
-        // ถ้ามี ValidUntil และเลยวันที่สิ้นสุดแล้ว ให้ข้าม
-        if (validUntil && now > validUntil) {
-          console.log(`[PROMO CHECK] ${promotion.Name} - Expired (ended ${validUntil.toISOString()}, now: ${now.toISOString()})`)
+
+        if (!isPromotionWithinUsageLimits(promotion, { userOrderRows: userPromoOrderRows })) {
+          console.log(`[PROMO CHECK] ${promotion.Name} - Usage limit reached (per user or total)`)
           continue
         }
 
@@ -486,25 +498,8 @@ export default function Checkout({ user }) {
           // ตรวจสอบว่ามีสินค้าในตะกร้าครบจำนวนที่ต้องซื้อ
           // สำหรับสินค้าแถม ให้ใช้เฉพาะจำนวนที่ต้องจ่าย (ไม่รวมสินค้าแถม)
           // แต่ต้องตรวจสอบว่า freeQty มาจากโปรโมชั่นนี้หรือไม่
-          let paidQty = cartItem.qty
-          
-          if (cartItem.isFree && cartItem.freeQty && cartItem.freeQty > 0) {
-            // ถ้าเป็นสินค้าแถม ต้องตรวจสอบว่า freeQty มาจากโปรโมชั่นนี้หรือไม่
-            if (cartItem.promotionId === promotion.id) {
-              // ถ้า freeQty มาจากโปรโมชั่นนี้ ให้ลบออกเพื่อคำนวณ paidQty
-              paidQty = cartItem.qty - cartItem.freeQty
-              console.log(`[PROMO CHECK] ${promotion.Name} - FreeQty from this promotion, calculating paidQty: ${cartItem.qty} - ${cartItem.freeQty} = ${paidQty}`)
-            } else {
-              // ถ้า freeQty ไม่ได้มาจากโปรโมชั่นนี้ หรือ promotionId เป็น undefined
-              // ให้ใช้ qty ทั้งหมด (เพราะเป็นสินค้าที่ต้องจ่ายทั้งหมด)
-              paidQty = cartItem.qty
-              console.log(`[PROMO CHECK] ${promotion.Name} - FreeQty NOT from this promotion (promotionId: ${cartItem.promotionId}), using full qty: ${paidQty}`)
-            }
-          } else {
-            // ไม่ใช่สินค้าแถม ใช้ qty ทั้งหมด
-            paidQty = cartItem.qty
-          }
-          
+          const paidQty = getPromotionPaidQty(cartItem, promotion.id)
+
           console.log(`[PROMO CHECK] ${promotion.Name} - Product: ${promotion.ProductID}, BuyQuantity: ${buyQuantity}, Cart Qty: ${cartItem.qty}, Paid Qty: ${paidQty}, IsFree: ${cartItem.isFree}, FreeQty: ${cartItem.freeQty}, PromotionId: ${cartItem.promotionId}`)
           
           // ตรวจสอบว่าจำนวนที่ต้องจ่ายต้องมากกว่าหรือเท่ากับ BuyQuantity
@@ -565,66 +560,23 @@ export default function Checkout({ user }) {
             console.error(`[PROMO CHECK] Error fetching product ${getProductID} for promotion:`, error)
             continue
           }
-        } else if (promotion.Type === 'discount_percentage') {
-          // ส่วนลดเปอร์เซ็นต์
-          const discountPercent = promotion.DiscountPercentage || 0
-          const maxDiscount = promotion.MaxDiscount || 0
-          
-          // ตรวจสอบว่ามีส่วนลดเปอร์เซ็นต์ที่ถูกต้อง
-          if (discountPercent <= 0 || discountPercent > 100) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - Invalid DiscountPercentage (${discountPercent})`)
-            continue
-          }
-          
-          // คำนวณส่วนลดจากราคาสินค้า X เท่านั้น (เฉพาะจำนวนที่ต้องจ่าย)
-          const paidQty = cartItem.isFree && cartItem.freeQty ? (cartItem.qty - cartItem.freeQty) : cartItem.qty
-          
-          if (paidQty <= 0) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - No paid quantity for discount calculation`)
-            continue
-          }
-          
-          const itemSubtotal = cartItem.price * paidQty
-          let discountAmount = (itemSubtotal * discountPercent) / 100
-          
-          // จำกัดส่วนลดสูงสุด
-          if (maxDiscount > 0 && discountAmount > maxDiscount) {
-            discountAmount = maxDiscount
-          }
-          
+        } else if (
+          promotion.Type === 'discount_percentage' ||
+          promotion.Type === 'discount_fixed' ||
+          promotion.Type === 'target_unit_price' ||
+          promotion.Type === 'second_item_discount'
+        ) {
+          const discountAmount = computePromotionMoneyDiscount(promotion, cartItem)
           if (discountAmount > 0) {
             console.log(`[PROMO CHECK] ${promotion.Name} - APPLIED! Discount: ${discountAmount.toFixed(2)}`)
             totalPromotionDiscount += discountAmount
             applicablePromotions.push({
               ...promotion,
-              discountAmount: discountAmount
+              discountAmount
             })
           } else {
-            console.log(`[PROMO CHECK] ${promotion.Name} - No discount calculated (amount: ${discountAmount})`)
+            console.log(`[PROMO CHECK] ${promotion.Name} - No discount calculated`)
           }
-        } else if (promotion.Type === 'discount_fixed') {
-          // ส่วนลดจำนวนเงิน
-          const discountAmount = promotion.DiscountAmount || 0
-          
-          if (discountAmount <= 0) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - Invalid DiscountAmount (${discountAmount})`)
-            continue
-          }
-          
-          // ตรวจสอบว่ามีสินค้าในตะกร้า (ต้องมีอย่างน้อย 1 ชิ้น)
-          const paidQty = cartItem.isFree && cartItem.freeQty ? (cartItem.qty - cartItem.freeQty) : cartItem.qty
-          
-          if (paidQty <= 0) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - No paid quantity for fixed discount`)
-            continue
-          }
-          
-          console.log(`[PROMO CHECK] ${promotion.Name} - APPLIED! Fixed Discount: ${discountAmount}`)
-          totalPromotionDiscount += discountAmount
-          applicablePromotions.push({
-            ...promotion,
-            discountAmount: discountAmount
-          })
         } else {
           console.log(`[PROMO CHECK] ${promotion.Name} - Unknown type: ${promotion.Type}`)
         }
