@@ -665,25 +665,54 @@ export const orderService = {
           try {
             for (const promotion of orderData.promotions) {
               if (promotion.id) {
-                // Get current usage count
+                // Get current usage count and product quota counters
                 const { data: promotionData, error: fetchError } = await supabase
                   .from('promotions')
-                  .select('UsageCount')
+                  .select('UsageCount, PromotionProductLimit, PromotionProductUsed, ProductID')
                   .eq('id', promotion.id)
                   .maybeSingle()
                 
                 if (!fetchError && promotionData) {
                   const newUsageCount = (promotionData.UsageCount || 0) + 1
+                  const appliedProductQty = Math.max(0, Math.floor(Number(promotion.appliedProductQty) || 0))
+                  const newProductUsed =
+                    (Number(promotionData.PromotionProductUsed) || 0) + appliedProductQty
+                  const updateData = { UsageCount: newUsageCount }
+
+                  if (appliedProductQty > 0) {
+                    updateData.PromotionProductUsed = newProductUsed
+                  }
+
+                  const productLimit = Math.max(0, Number(promotionData.PromotionProductLimit) || 0)
+                  if (productLimit > 0 && newProductUsed >= productLimit) {
+                    updateData.Status = 'inactive'
+                  } else if (productLimit === 0) {
+                    try {
+                      const productId = promotionData.ProductID || promotion.productId
+                      if (productId) {
+                        const product = await productService.getProduct(productId)
+                        if ((Number(product?.stock) || 0) <= 0) updateData.Status = 'inactive'
+                      }
+                    } catch (stockCheckError) {
+                      console.warn(
+                        `Could not check stock before auto-disabling promotion ${promotion.id}:`,
+                        stockCheckError
+                      )
+                    }
+                  }
+
                   const { error: updateError } = await supabase
                     .from('promotions')
-                    .update({ UsageCount: newUsageCount })
+                    .update(updateData)
                     .eq('id', promotion.id)
                   
                   if (updateError) {
                     console.error(`Error updating promotion usage count for ID ${promotion.id}:`, updateError)
                     // Don't throw error - order is already placed
                   } else {
-                    console.log(`Promotion usage count updated for ID: ${promotion.id} (${newUsageCount})`)
+                    console.log(
+                      `Promotion usage count updated for ID: ${promotion.id} (${newUsageCount}), product used: ${newProductUsed}`
+                    )
                   }
                 } else if (fetchError) {
                   console.error(`Error fetching promotion for usage count update (ID: ${promotion.id}):`, fetchError)

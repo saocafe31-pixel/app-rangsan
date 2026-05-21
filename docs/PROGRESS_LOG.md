@@ -32,6 +32,13 @@
 
 <!-- progress-log-entries -->
 
+### 2026-05-21 — [feat] โปรโมชั่นตามกลุ่มลูกค้าและโควต้าสินค้า
+- **สรุป:** เพิ่มการกำหนดโปรสำหรับ `all`/`regular`/`franchise`; เพิ่มโควต้าจำนวนสินค้า X ที่จัดโปรพร้อม partial apply เมื่อเหลือน้อยกว่าจำนวนในตะกร้า; Checkout นับจำนวนสินค้าโปรที่ใช้และ orderService ปิดโปรอัตโนมัติเมื่อครบโควต้าหรือสต็อกหมด
+- **ไฟล์หลัก:** `supabase/migrations/20260521095900_promotion_role_product_quota.sql`, `src/utils/promotionUtils.js`, `src/pages/AdminPromotions.jsx`, `src/pages/Checkout.jsx`, `src/services/orderService.js`, `src/utils/promotionUtils.test.js`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test -- --run src/utils/promotionUtils.test.js` (15 tests), `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** Supabase CLI ไม่อยู่ใน PATH จึงสร้าง migration file โดยตรง; ต้องรัน migration `20260521095900` บน Supabase ก่อนใช้ฟิลด์ใหม่
+
 ### 2026-05-19 — [feat] โปรชิ้นที่ 2 ลด + จำกัดการใช้โปร
 - **สรุป:** เพิ่มประเภท `second_item_discount`; ฟิลด์ `UsageLimit`/`TotalUsageLimit`/`UsageCount`; Checkout ตรวจโควต้าก่อนใช้โปร; บันทึก `PromoIds:` ใน DiscountInfo และนับต่อคน
 - **ไฟล์หลัก:** `supabase/migrations/20260519130000_promotion_second_item_usage_limits.sql`, `src/pages/AdminPromotions.jsx`, `src/pages/Checkout.jsx`, `src/services/orderService.js`, `src/utils/promotionUtils.test.js`, `docs/PROGRESS_LOG.md`

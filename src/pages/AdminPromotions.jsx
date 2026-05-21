@@ -8,6 +8,7 @@ import Swal from 'sweetalert2'
 import LoadingSpinner from '../components/common/LoadingSpinner'
 import {
   PROMOTION_TYPE_LABELS,
+  PROMOTION_TARGET_CUSTOMER_TYPE_LABELS,
   computePromotionMoneyDiscount,
   formatPromotionCondition,
   promotionDateInputToIsoRange
@@ -52,6 +53,8 @@ export default function AdminPromotions({ user }) {
     Description: '',
     UsageLimit: 0,
     TotalUsageLimit: 0,
+    TargetCustomerType: 'all',
+    PromotionProductLimit: 0,
     secondItemDiscountMode: 'percent'
   })
 
@@ -138,6 +141,8 @@ export default function AdminPromotions({ user }) {
       Description: '',
       UsageLimit: 0,
       TotalUsageLimit: 0,
+      TargetCustomerType: 'all',
+      PromotionProductLimit: 0,
       secondItemDiscountMode: 'percent'
     })
     setShowModal(true)
@@ -164,6 +169,8 @@ export default function AdminPromotions({ user }) {
       Description: promotion.Description || '',
       UsageLimit: promotion.UsageLimit || 0,
       TotalUsageLimit: promotion.TotalUsageLimit || 0,
+      TargetCustomerType: promotion.TargetCustomerType || 'all',
+      PromotionProductLimit: promotion.PromotionProductLimit || 0,
       secondItemDiscountMode:
         promotion.Type === 'second_item_discount' && !(Number(promotion.DiscountPercentage) > 0)
           ? 'fixed'
@@ -266,6 +273,15 @@ export default function AdminPromotions({ user }) {
       return
     }
 
+    if (Number(promotionForm.PromotionProductLimit) < 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'ข้อมูลไม่ถูกต้อง',
+        text: 'จำนวนสินค้า X ที่จัดโปรต้องไม่ติดลบ'
+      })
+      return
+    }
+
     try {
       const isSecondItem = promotionForm.Type === 'second_item_discount'
       const secondPercent =
@@ -295,7 +311,9 @@ export default function AdminPromotions({ user }) {
         Status: promotionForm.Status,
         Description: promotionForm.Description || '',
         UsageLimit: Number(promotionForm.UsageLimit) || 0,
-        TotalUsageLimit: Number(promotionForm.TotalUsageLimit) || 0
+        TotalUsageLimit: Number(promotionForm.TotalUsageLimit) || 0,
+        TargetCustomerType: promotionForm.TargetCustomerType || 'all',
+        PromotionProductLimit: Number(promotionForm.PromotionProductLimit) || 0
       }
 
       if (editingPromotion) {
@@ -444,6 +462,8 @@ export default function AdminPromotions({ user }) {
   }
 
   const getTypeLabel = (type) => PROMOTION_TYPE_LABELS[type] || type
+  const getTargetCustomerTypeLabel = (type) =>
+    PROMOTION_TARGET_CUSTOMER_TYPE_LABELS[type || 'all'] || PROMOTION_TARGET_CUSTOMER_TYPE_LABELS.all
 
   const handlePromotionTypeChange = (nextType) => {
     setPromotionForm((f) => ({
@@ -600,10 +620,12 @@ export default function AdminPromotions({ user }) {
                       <tr>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">ชื่อโปรโมชั่น</th>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">ประเภท</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">กลุ่มลูกค้า</th>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">รหัสสินค้า</th>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">เงื่อนไข</th>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">วันที่เริ่มต้น</th>
                         <th className="px-6 py-3 text-left text-xs font-bold text-gray-700 uppercase">วันที่สิ้นสุด</th>
+                        <th className="px-6 py-3 text-center text-xs font-bold text-gray-700 uppercase">สินค้าโปร</th>
                         <th className="px-6 py-3 text-center text-xs font-bold text-gray-700 uppercase">จำนวนการใช้งาน</th>
                         <th className="px-6 py-3 text-center text-xs font-bold text-gray-700 uppercase">สถานะ</th>
                         <th className="px-6 py-3 text-center text-xs font-bold text-gray-700 uppercase">จัดการ</th>
@@ -616,6 +638,14 @@ export default function AdminPromotions({ user }) {
                         const productId = promotion.ProductID || ''
                         const status = promotion.Status || ''
                         const description = promotion.Description || ''
+                        const product = products.find((p) => p.id === productId)
+                        const productStock = Math.max(0, Number(product?.stock) || 0)
+                        const productLimit = Math.max(0, Number(promotion.PromotionProductLimit) || 0)
+                        const productUsed = Math.max(0, Number(promotion.PromotionProductUsed) || 0)
+                        const productRemaining =
+                          productLimit > 0
+                            ? Math.max(0, productLimit - productUsed)
+                            : productStock
                         
                         return (
                           <tr key={promotion.id} className="hover:bg-gray-50">
@@ -627,6 +657,9 @@ export default function AdminPromotions({ user }) {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {getTypeLabel(type)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                              {getTargetCustomerTypeLabel(promotion.TargetCustomerType)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                               {productId}
@@ -669,6 +702,20 @@ export default function AdminPromotions({ user }) {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                               {formatDate(promotion.ValidUntil)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-center text-xs">
+                              <div className="text-sm font-semibold text-gray-900">
+                                ใช้แล้ว {productUsed.toLocaleString()} ชิ้น
+                              </div>
+                              {productLimit > 0 ? (
+                                <div className="text-gray-500">
+                                  เหลือ {productRemaining.toLocaleString()} / {productLimit.toLocaleString()} ชิ้น
+                                </div>
+                              ) : (
+                                <div className="text-gray-500">
+                                  ตามสต็อก: {productRemaining.toLocaleString()} ชิ้น
+                                </div>
+                              )}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center text-xs">
                               <div className="text-sm font-semibold text-gray-900">
@@ -775,6 +822,23 @@ export default function AdminPromotions({ user }) {
                 )}
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  แสดงโปรโมชั่นให้ *
+                </label>
+                <select
+                  value={promotionForm.TargetCustomerType}
+                  onChange={(e) =>
+                    setPromotionForm({ ...promotionForm, TargetCustomerType: e.target.value })
+                  }
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="regular">ลูกค้าปกติ</option>
+                  <option value="franchise">แฟรนไชส์</option>
+                </select>
+              </div>
+
               {/* ProductID */}
               <div className="product-dropdown-container">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -822,6 +886,36 @@ export default function AdminPromotions({ user }) {
                   <div className="mt-2 text-sm text-gray-600">
                     <span className="font-medium">สินค้า:</span> {getSelectedProduct().name}
                   </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  จำนวนสินค้า X ที่จัดโปร (0 = ใช้ตามสต็อกจริง)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={
+                    promotionForm.PromotionProductLimit === 0
+                      ? ''
+                      : promotionForm.PromotionProductLimit
+                  }
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setPromotionForm({
+                      ...promotionForm,
+                      PromotionProductLimit: v === '' ? 0 : parseInt(v, 10) || 0
+                    })
+                  }}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  placeholder="เช่น 100"
+                />
+                {getSelectedProduct() && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    สต็อกปัจจุบันสินค้า X: {Number(getSelectedProduct().stock || 0).toLocaleString()} ชิ้น
+                  </p>
                 )}
               </div>
 

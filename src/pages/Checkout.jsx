@@ -33,7 +33,11 @@ import {
 import { computeBundleStockMoves, getEffectiveStock } from '../utils/orderBundleLineUtils'
 import {
   computePromotionMoneyDiscount,
+  getPromotionAppliedProductQty,
+  getPromotionEligiblePaidQty,
   getPromotionPaidQty,
+  isPromotionVisibleToCustomer,
+  isPromotionWithinProductQuota,
   isPromotionWithinUsageLimits,
   isPromotionWithinValidDates
 } from '../utils/promotionUtils'
@@ -183,7 +187,7 @@ export default function Checkout({ user }) {
     calculateShipping()
     checkPromotions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart, formData.shippingMethod, features.allowPromotion, isFromPO])
+  }, [cart, formData.shippingMethod, features.allowPromotion, isFromPO, user?.email, user?.userType, user?.customerType])
 
   useEffect(() => {
     getFeaturesSettings().then(setFeatures)
@@ -425,6 +429,22 @@ export default function Checkout({ user }) {
       const cartKeysPromo = getDistinctSupplierKeysInCart(cart)
       const multiSupPromo = cartKeysPromo.length > 1
       const hasCentralPromo = cartKeysPromo.some((k) => normalizeSupplierName(k) === CENTRAL_SUPPLIER_LABEL)
+      const productStockCache = new Map()
+      const getCurrentProductStockQty = async (productId, fallbackStock = null) => {
+        if (!productId) return Math.max(0, Number(fallbackStock) || 0)
+        if (productStockCache.has(productId)) return productStockCache.get(productId)
+        try {
+          const product = await productService.getProduct(productId)
+          const stockQty = Math.max(0, Number(product?.stock ?? fallbackStock ?? 0) || 0)
+          productStockCache.set(productId, stockQty)
+          return stockQty
+        } catch (stockError) {
+          console.warn(`[PROMO CHECK] Could not fetch stock for ${productId}:`, stockError)
+          const fallback = Math.max(0, Number(fallbackStock) || 0)
+          productStockCache.set(productId, fallback)
+          return fallback
+        }
+      }
       
       const applicablePromotions = []
       let totalPromotionDiscount = 0
@@ -435,6 +455,11 @@ export default function Checkout({ user }) {
         
         if (!isPromotionWithinValidDates(promotion, now)) {
           console.log(`[PROMO CHECK] ${promotion.Name} - Outside valid date range`)
+          continue
+        }
+
+        if (!isPromotionVisibleToCustomer(promotion, user)) {
+          console.log(`[PROMO CHECK] ${promotion.Name} - Not visible for current customer type`)
           continue
         }
 
@@ -469,6 +494,20 @@ export default function Checkout({ user }) {
           continue
         }
 
+        const currentStockQty = await getCurrentProductStockQty(promotion.ProductID, cartItem.stock)
+        if (!isPromotionWithinProductQuota(promotion, { stockQty: currentStockQty })) {
+          console.log(`[PROMO CHECK] ${promotion.Name} - Product promotion quota reached`)
+          continue
+        }
+
+        const eligiblePaidQty = getPromotionEligiblePaidQty(promotion, cartItem, {
+          stockQty: currentStockQty
+        })
+        if (eligiblePaidQty <= 0) {
+          console.log(`[PROMO CHECK] ${promotion.Name} - No eligible product quantity left`)
+          continue
+        }
+
         const promoAllowedKeys = parseAllowedSupplierKeys(promotion.AllowedSupplierKeys)
         if (
           !promotionAllowedForProductSupplier({
@@ -500,20 +539,20 @@ export default function Checkout({ user }) {
           // แต่ต้องตรวจสอบว่า freeQty มาจากโปรโมชั่นนี้หรือไม่
           const paidQty = getPromotionPaidQty(cartItem, promotion.id)
 
-          console.log(`[PROMO CHECK] ${promotion.Name} - Product: ${promotion.ProductID}, BuyQuantity: ${buyQuantity}, Cart Qty: ${cartItem.qty}, Paid Qty: ${paidQty}, IsFree: ${cartItem.isFree}, FreeQty: ${cartItem.freeQty}, PromotionId: ${cartItem.promotionId}`)
+          console.log(`[PROMO CHECK] ${promotion.Name} - Product: ${promotion.ProductID}, BuyQuantity: ${buyQuantity}, Cart Qty: ${cartItem.qty}, Paid Qty: ${paidQty}, Eligible Qty: ${eligiblePaidQty}, IsFree: ${cartItem.isFree}, FreeQty: ${cartItem.freeQty}, PromotionId: ${cartItem.promotionId}`)
           
           // ตรวจสอบว่าจำนวนที่ต้องจ่ายต้องมากกว่าหรือเท่ากับ BuyQuantity
-          if (paidQty < buyQuantity) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - Not enough quantity. Required: ${buyQuantity}, Have: ${paidQty}`)
+          if (eligiblePaidQty < buyQuantity) {
+            console.log(`[PROMO CHECK] ${promotion.Name} - Not enough eligible quantity. Required: ${buyQuantity}, Have: ${eligiblePaidQty}`)
             continue
           }
           
           // คำนวณจำนวนครั้งที่ได้โปรโมชั่น (ถ้าซื้อ 10 แถม 1 และมี 25 ชิ้น = ได้ 2 ครั้ง)
           // ใช้เฉพาะจำนวนที่ต้องจ่าย (ไม่รวมสินค้าแถม)
-          const times = Math.floor(paidQty / buyQuantity)
+          const times = Math.floor(eligiblePaidQty / buyQuantity)
           
           if (times <= 0) {
-            console.log(`[PROMO CHECK] ${promotion.Name} - Cannot calculate times. PaidQty: ${paidQty}, BuyQuantity: ${buyQuantity}`)
+            console.log(`[PROMO CHECK] ${promotion.Name} - Cannot calculate times. EligibleQty: ${eligiblePaidQty}, BuyQuantity: ${buyQuantity}`)
             continue
           }
           
@@ -554,7 +593,8 @@ export default function Checkout({ user }) {
             applicablePromotions.push({
               ...promotion,
               appliedTimes: times,
-              freeQuantity: totalFreeQty
+              freeQuantity: totalFreeQty,
+              appliedProductQty: times * buyQuantity
             })
           } catch (error) {
             console.error(`[PROMO CHECK] Error fetching product ${getProductID} for promotion:`, error)
@@ -566,13 +606,15 @@ export default function Checkout({ user }) {
           promotion.Type === 'target_unit_price' ||
           promotion.Type === 'second_item_discount'
         ) {
-          const discountAmount = computePromotionMoneyDiscount(promotion, cartItem)
+          const discountAmount = computePromotionMoneyDiscount(promotion, cartItem, { eligiblePaidQty })
+          const appliedProductQty = getPromotionAppliedProductQty(promotion, cartItem, { eligiblePaidQty })
           if (discountAmount > 0) {
             console.log(`[PROMO CHECK] ${promotion.Name} - APPLIED! Discount: ${discountAmount.toFixed(2)}`)
             totalPromotionDiscount += discountAmount
             applicablePromotions.push({
               ...promotion,
-              discountAmount
+              discountAmount,
+              appliedProductQty
             })
           } else {
             console.log(`[PROMO CHECK] ${promotion.Name} - No discount calculated`)
@@ -1309,7 +1351,9 @@ export default function Checkout({ user }) {
                   id: p.id,
                   name: p.Name,
                   type: p.Type,
-                  discountAmount: p.discountAmount || 0
+                  productId: p.ProductID || null,
+                  discountAmount: p.discountAmount || 0,
+                  appliedProductQty: p.appliedProductQty || 0
                 }))
               : null,
           shippingCost: g.shippingShare,

@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   computePromotionMoneyDiscount,
   computeSecondItemPromotionDiscount,
+  getPromotionAppliedProductQty,
+  getPromotionEligiblePaidQty,
+  getPromotionProductRemainingQty,
   getPromotionPaidQty,
   getSecondItemDiscountUnits,
+  isPromotionVisibleToCustomer,
+  isPromotionWithinProductQuota,
   isPromotionWithinUsageLimits,
   isPromotionWithinValidDates,
   parsePromotionIdsFromDiscountInfo,
@@ -69,5 +74,40 @@ describe('promotionUtils', () => {
       { OrderID: 'O2', DiscountInfo: 'Code: X | PromoIds: 3, 7' }
     ]
     expect(isPromotionWithinUsageLimits(promo, { userOrderRows: rows })).toBe(false)
+  })
+
+  it('matches promotion target customer type', () => {
+    expect(isPromotionVisibleToCustomer({ TargetCustomerType: 'all' }, { userType: 'regular' })).toBe(true)
+    expect(isPromotionVisibleToCustomer({ TargetCustomerType: 'regular' }, { userType: 'regular' })).toBe(true)
+    expect(isPromotionVisibleToCustomer({ TargetCustomerType: 'regular' }, { userType: 'franchise' })).toBe(false)
+    expect(isPromotionVisibleToCustomer({ TargetCustomerType: 'franchise' }, { customerType: 'franchise' })).toBe(true)
+  })
+
+  it('uses product quota limit before stock fallback', () => {
+    const promo = { PromotionProductLimit: 10, PromotionProductUsed: 4 }
+    expect(getPromotionProductRemainingQty(promo, { stockQty: 99 })).toBe(6)
+    expect(isPromotionWithinProductQuota(promo, { stockQty: 99 })).toBe(true)
+  })
+
+  it('uses real stock when product quota limit is zero', () => {
+    expect(getPromotionProductRemainingQty({ PromotionProductLimit: 0 }, { stockQty: 7 })).toBe(7)
+    expect(isPromotionWithinProductQuota({ PromotionProductLimit: 0 }, { stockQty: 0 })).toBe(false)
+  })
+
+  it('partially applies fixed discount to remaining promo product quantity', () => {
+    const promo = { id: 'p1', Type: 'discount_fixed', DiscountAmount: 10, PromotionProductLimit: 3, PromotionProductUsed: 1 }
+    const item = { id: 'A1', price: 100, qty: 5 }
+    const eligiblePaidQty = getPromotionEligiblePaidQty(promo, item, { stockQty: 100 })
+    expect(eligiblePaidQty).toBe(2)
+    expect(computePromotionMoneyDiscount(promo, item, { eligiblePaidQty })).toBe(20)
+    expect(getPromotionAppliedProductQty(promo, item, { eligiblePaidQty })).toBe(2)
+  })
+
+  it('counts only complete buy-x promo sets as applied product quantity', () => {
+    const promo = { id: 'p1', Type: 'buy_x_get_y', BuyQuantity: 5, PromotionProductLimit: 7, PromotionProductUsed: 0 }
+    const item = { id: 'A1', price: 100, qty: 7 }
+    const eligiblePaidQty = getPromotionEligiblePaidQty(promo, item, { stockQty: 100 })
+    expect(eligiblePaidQty).toBe(7)
+    expect(getPromotionAppliedProductQty(promo, item, { eligiblePaidQty })).toBe(5)
   })
 })

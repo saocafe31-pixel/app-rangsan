@@ -10,6 +10,49 @@ export function getPromotionPaidQty(cartItem, promotionId) {
   return Math.max(0, paidQty)
 }
 
+function toNonNegativeInt(value) {
+  const n = Math.floor(Number(value) || 0)
+  return n > 0 ? n : 0
+}
+
+export function getCustomerPromotionType(user) {
+  const raw = String(user?.userType || user?.customerType || 'regular').trim().toLowerCase()
+  return raw === 'franchise' ? 'franchise' : 'regular'
+}
+
+export function normalizePromotionTargetCustomerType(value) {
+  const raw = String(value || 'all').trim().toLowerCase()
+  if (raw === 'regular' || raw === 'franchise') return raw
+  return 'all'
+}
+
+export function isPromotionVisibleToCustomer(promotion, user) {
+  const target = normalizePromotionTargetCustomerType(promotion?.TargetCustomerType)
+  if (target === 'all') return true
+  return target === getCustomerPromotionType(user)
+}
+
+export function getPromotionProductRemainingQty(promotion, { stockQty = null } = {}) {
+  const limit = toNonNegativeInt(promotion?.PromotionProductLimit)
+  const used = toNonNegativeInt(promotion?.PromotionProductUsed)
+  if (limit > 0) return Math.max(0, limit - used)
+
+  if (stockQty === null || stockQty === undefined || stockQty === '') {
+    return Number.POSITIVE_INFINITY
+  }
+  return Math.max(0, Math.floor(Number(stockQty) || 0))
+}
+
+export function getPromotionEligiblePaidQty(promotion, cartItem, { stockQty = null } = {}) {
+  const paidQty = getPromotionPaidQty(cartItem, promotion?.id)
+  const remainingQty = getPromotionProductRemainingQty(promotion, { stockQty })
+  return Math.max(0, Math.min(paidQty, remainingQty))
+}
+
+export function isPromotionWithinProductQuota(promotion, { stockQty = null } = {}) {
+  return getPromotionProductRemainingQty(promotion, { stockQty }) > 0
+}
+
 /** แปลงค่า date input (YYYY-MM-DD) เป็นช่วงเวลาใช้โปร */
 export function promotionDateInputToIsoRange(dateStr, kind) {
   const raw = String(dateStr || '').trim()
@@ -66,8 +109,11 @@ export function formatPromotionCondition(promotion) {
 }
 
 /** คำนวณส่วนลดเงินจากโปร (ไม่รวม buy_x_get_y) */
-export function computePromotionMoneyDiscount(promotion, cartItem) {
-  const paidQty = getPromotionPaidQty(cartItem, promotion.id)
+export function computePromotionMoneyDiscount(promotion, cartItem, { eligiblePaidQty = null } = {}) {
+  const paidQty =
+    eligiblePaidQty === null || eligiblePaidQty === undefined
+      ? getPromotionPaidQty(cartItem, promotion.id)
+      : Math.max(0, Math.floor(Number(eligiblePaidQty) || 0))
   if (paidQty <= 0) return 0
   const unitPrice = Number(cartItem.price || 0)
   const itemSubtotal = unitPrice * paidQty
@@ -95,7 +141,7 @@ export function computePromotionMoneyDiscount(promotion, cartItem) {
   }
 
   if (promotion.Type === 'second_item_discount') {
-    return computeSecondItemPromotionDiscount(promotion, cartItem)
+    return computeSecondItemPromotionDiscount(promotion, cartItem, { eligiblePaidQty: paidQty })
   }
 
   return 0
@@ -108,8 +154,11 @@ export function getSecondItemDiscountUnits(paidQty) {
   return Math.floor(q / 2)
 }
 
-export function computeSecondItemPromotionDiscount(promotion, cartItem) {
-  const paidQty = getPromotionPaidQty(cartItem, promotion.id)
+export function computeSecondItemPromotionDiscount(promotion, cartItem, { eligiblePaidQty = null } = {}) {
+  const paidQty =
+    eligiblePaidQty === null || eligiblePaidQty === undefined
+      ? getPromotionPaidQty(cartItem, promotion.id)
+      : Math.max(0, Math.floor(Number(eligiblePaidQty) || 0))
   const discountedUnits = getSecondItemDiscountUnits(paidQty)
   if (discountedUnits <= 0) return 0
 
@@ -127,6 +176,26 @@ export function computeSecondItemPromotionDiscount(promotion, cartItem) {
   const perUnit = Number(promotion.DiscountAmount) || 0
   if (perUnit <= 0) return 0
   return Math.min(unitPrice * discountedUnits, perUnit * discountedUnits)
+}
+
+export function getPromotionAppliedProductQty(promotion, cartItem, { eligiblePaidQty = null } = {}) {
+  const paidQty =
+    eligiblePaidQty === null || eligiblePaidQty === undefined
+      ? getPromotionPaidQty(cartItem, promotion?.id)
+      : Math.max(0, Math.floor(Number(eligiblePaidQty) || 0))
+  if (paidQty <= 0) return 0
+
+  if (promotion?.Type === 'buy_x_get_y') {
+    const buyQuantity = toNonNegativeInt(promotion.BuyQuantity)
+    if (buyQuantity <= 0) return 0
+    return Math.floor(paidQty / buyQuantity) * buyQuantity
+  }
+
+  if (promotion?.Type === 'second_item_discount') {
+    return getSecondItemDiscountUnits(paidQty) * 2
+  }
+
+  return paidQty
 }
 
 /** ดึงรหัสโปรจาก DiscountInfo (รูปแบบ `PromoIds: 1,2`) */
@@ -173,4 +242,10 @@ export const PROMOTION_TYPE_LABELS = {
   discount_fixed: 'ส่วนลดต่อชิ้น',
   target_unit_price: 'ราคาพิเศษต่อชิ้น',
   second_item_discount: 'ชิ้นที่ 2 ลด (บาท/%)'
+}
+
+export const PROMOTION_TARGET_CUSTOMER_TYPE_LABELS = {
+  all: 'ทั้งหมด',
+  regular: 'ลูกค้าปกติ',
+  franchise: 'แฟรนไชส์'
 }
