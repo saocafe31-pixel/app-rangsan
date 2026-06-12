@@ -1,5 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useOrders } from '../hooks/useOrders'
+import { creditService } from '../services/creditService'
+import { imageService } from '../services/imageService'
+import { installmentService } from '../services/installmentService'
 import { notificationService } from '../services/notificationService'
 import Header from '../components/common/Header'
 import Sidebar from '../components/common/Sidebar'
@@ -108,6 +111,150 @@ export default function History({ user }) {
       })
     } catch (e) {
       return dateStr
+    }
+  }
+
+  const formatMoney = (value) =>
+    `฿${Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  const getInstallmentStatusText = (status) => {
+    switch (status) {
+      case 'paid':
+        return 'ชำระครบแล้ว'
+      case 'partial':
+        return 'ชำระบางส่วน'
+      case 'overdue':
+        return 'เกินกำหนด'
+      case 'cancelled':
+        return 'ยกเลิกแผน'
+      default:
+        return 'รอชำระ'
+    }
+  }
+
+  const getInstallmentStatusClass = (status) => {
+    switch (status) {
+      case 'paid':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+      case 'partial':
+        return 'bg-blue-100 text-blue-800 border-blue-200'
+      case 'overdue':
+        return 'bg-red-100 text-red-800 border-red-200'
+      case 'cancelled':
+        return 'bg-gray-100 text-gray-700 border-gray-200'
+      default:
+        return 'bg-amber-100 text-amber-800 border-amber-200'
+    }
+  }
+
+  const handlePayInstallmentRemaining = async (order) => {
+    const plan = order.InstallmentPlan
+    const orderId = order.OrderID || order.ID
+    const remainingAmount = Number(plan?.remainingAmount || 0)
+    if (!plan?.id || remainingAmount <= 0) return
+
+    try {
+      const credit = await creditService.getUserCredit(user.email)
+      const result = await Swal.fire({
+        title: 'ชำระยอดคงเหลือ',
+        html: `
+          <div class="text-left space-y-3">
+            <div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm">
+              <div class="flex justify-between"><span>เลขออเดอร์</span><b>${orderId}</b></div>
+              <div class="flex justify-between"><span>ยอดคงเหลือ</span><b class="text-amber-700">${formatMoney(remainingAmount)}</b></div>
+              <div class="flex justify-between"><span>เครดิตคงเหลือ</span><b class="text-emerald-700">${formatMoney(credit.balance || 0)}</b></div>
+            </div>
+            <label class="block text-sm font-bold text-gray-700">เลือกวิธีชำระ</label>
+            <div class="space-y-2 text-sm">
+              <label class="flex items-center gap-2 rounded-lg border p-2 cursor-pointer">
+                <input type="radio" name="installment-payment-method" value="transfer" checked />
+                <span>โอนเงินและแนบสลิป</span>
+              </label>
+              <label class="flex items-center gap-2 rounded-lg border p-2 cursor-pointer">
+                <input type="radio" name="installment-payment-method" value="credit" ${Number(credit.balance || 0) < remainingAmount ? 'disabled' : ''} />
+                <span>หักเครดิต ${Number(credit.balance || 0) < remainingAmount ? '(เครดิตไม่เพียงพอ)' : ''}</span>
+              </label>
+            </div>
+            <div>
+              <label class="block text-sm font-bold text-gray-700 mb-1">สลิปโอนเงิน (ใช้เมื่อเลือกโอน)</label>
+              <input id="installment-slip-file" type="file" accept="image/*" class="w-full text-sm border rounded-lg p-2" />
+            </div>
+          </div>
+        `,
+        showCancelButton: true,
+        confirmButtonText: 'ยืนยันชำระ',
+        cancelButtonText: 'ยกเลิก',
+        focusConfirm: false,
+        preConfirm: () => {
+          const selected = document.querySelector('input[name="installment-payment-method"]:checked')?.value || 'transfer'
+          const file = document.getElementById('installment-slip-file')?.files?.[0] || null
+          if (selected === 'transfer' && !file) {
+            Swal.showValidationMessage('กรุณาแนบสลิปโอนเงิน')
+            return false
+          }
+          if (selected === 'credit' && Number(credit.balance || 0) < remainingAmount) {
+            Swal.showValidationMessage('ยอดเครดิตไม่เพียงพอ')
+            return false
+          }
+          return { method: selected, file }
+        }
+      })
+
+      if (!result.isConfirmed) return
+
+      Swal.fire({
+        title: 'กำลังบันทึกการชำระ...',
+        didOpen: () => Swal.showLoading(),
+        allowOutsideClick: false
+      })
+
+      if (result.value.method === 'credit') {
+        await creditService.deductCredit(
+          user.email,
+          remainingAmount,
+          orderId,
+          `ชำระยอดคงเหลือแบ่งชำระ ออเดอร์ ${orderId}`
+        )
+        await installmentService.recordPayment({
+          planId: plan.id,
+          orderId,
+          userEmail: user.email,
+          amount: remainingAmount,
+          paymentMethod: 'credit',
+          note: 'ชำระยอดคงเหลือด้วยเครดิต',
+          recordedBy: user.email,
+          metadata: { source: 'history_remaining_payment' }
+        })
+      } else {
+        const slipURL = await imageService.uploadOrderSlip(result.value.file, orderId, user.email)
+        await installmentService.recordPayment({
+          planId: plan.id,
+          orderId,
+          userEmail: user.email,
+          amount: remainingAmount,
+          paymentMethod: 'transfer',
+          slipURL,
+          note: 'ชำระยอดคงเหลือด้วยการโอนเงิน',
+          recordedBy: user.email,
+          metadata: { source: 'history_remaining_payment' }
+        })
+      }
+
+      await refresh()
+      Swal.fire({
+        icon: 'success',
+        title: 'บันทึกการชำระเรียบร้อย',
+        text: 'ระบบอัปเดตยอดแบ่งชำระของออเดอร์นี้แล้ว',
+        timer: 1800,
+        showConfirmButton: false
+      })
+    } catch (error) {
+      console.error('Error paying installment remaining:', error)
+      Swal.fire({
+        icon: 'error',
+        title: 'ชำระไม่สำเร็จ',
+        text: error.message || 'ไม่สามารถบันทึกการชำระยอดคงเหลือได้'
+      })
     }
   }
 
@@ -393,6 +540,80 @@ export default function History({ user }) {
                       )}
                     </span>
                   </div>
+                  {order.InstallmentPlan && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-bold text-emerald-900 flex items-center gap-2">
+                            <Icon icon="fa-percent" className="text-emerald-600" />
+                            แผนแบ่งชำระ
+                          </p>
+                          <p className="text-xs text-emerald-800">
+                            ครบกำหนด: {order.InstallmentPlan.dueDate ? new Date(order.InstallmentPlan.dueDate).toLocaleDateString('th-TH') : '-'}
+                          </p>
+                        </div>
+                        <span className={`px-2 py-1 rounded-full border text-[10px] font-bold ${getInstallmentStatusClass(order.InstallmentPlan.paymentStatus)}`}>
+                          {getInstallmentStatusText(order.InstallmentPlan.paymentStatus)}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        <div className="bg-white rounded-lg border border-emerald-100 p-2">
+                          <p className="text-gray-500">ยอดรวม</p>
+                          <p className="font-bold text-gray-900">{formatMoney(order.InstallmentPlan.totalAmount)}</p>
+                        </div>
+                        <div className="bg-white rounded-lg border border-emerald-100 p-2">
+                          <p className="text-gray-500">งวดแรก</p>
+                          <p className="font-bold text-emerald-700">
+                            {order.InstallmentPlan.depositPercent}% / {formatMoney(order.InstallmentPlan.depositAmount)}
+                          </p>
+                        </div>
+                        <div className="bg-white rounded-lg border border-emerald-100 p-2">
+                          <p className="text-gray-500">จ่ายแล้ว</p>
+                          <p className="font-bold text-emerald-700">{formatMoney(order.InstallmentPlan.paidAmount)}</p>
+                        </div>
+                        <div className="bg-white rounded-lg border border-emerald-100 p-2">
+                          <p className="text-gray-500">ยอดคงเหลือ</p>
+                          <p className="font-bold text-amber-700">{formatMoney(order.InstallmentPlan.remainingAmount)}</p>
+                        </div>
+                      </div>
+                      {(order.InstallmentPayments || []).length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-bold text-gray-700">ประวัติการชำระ</p>
+                          {(order.InstallmentPayments || []).map((payment, idx) => (
+                            <div key={payment.id || idx} className="flex items-center justify-between gap-2 bg-white border border-emerald-100 rounded-lg p-2 text-xs">
+                              <div>
+                                <p className="font-bold text-gray-800">
+                                  ครั้งที่ {idx + 1}: {payment.paymentMethod === 'credit' ? 'เครดิต' : 'โอนเงิน'}
+                                </p>
+                                <p className="text-gray-500">{formatDate(payment.paidAt || payment.createdAt)}</p>
+                                {payment.slipURL && (
+                                  <a
+                                    href={payment.slipURL}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-blue-700 underline"
+                                  >
+                                    เปิดสลิป
+                                  </a>
+                                )}
+                              </div>
+                              <span className="font-bold text-emerald-700">{formatMoney(payment.amount)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {Number(order.InstallmentPlan.remainingAmount || 0) > 0 && order.InstallmentPlan.paymentStatus !== 'cancelled' && (
+                        <button
+                          type="button"
+                          onClick={() => handlePayInstallmentRemaining(order)}
+                          className="w-full px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition flex items-center justify-center gap-2"
+                        >
+                          <Icon icon="fa-money-bill-wave" />
+                          ชำระยอดคงเหลือ {formatMoney(order.InstallmentPlan.remainingAmount)}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="flex justify-between font-bold text-base pt-2 border-t border-gray-200">
                     <span>ยอดสุทธิ</span>
                     <span className="text-emerald-700 font-bold text-lg">

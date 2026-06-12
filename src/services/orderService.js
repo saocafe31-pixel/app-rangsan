@@ -11,6 +11,7 @@ import {
   orderItemNameFirstLine,
   parseBundleSelectionIdsFromItemName
 } from '../utils/orderBundleLineUtils'
+import { installmentService } from './installmentService'
 
 async function deductStockForPlacedOrderItem(item, userEmail, orderId) {
   const moves =
@@ -163,6 +164,39 @@ async function enrichOrdersWithUsernames(orders) {
   return orders
 }
 
+async function enrichOrdersWithInstallmentPlans(orders) {
+  if (!Array.isArray(orders) || orders.length === 0) return orders
+  const orderIds = orders.map((order) => order.ID || order.OrderID).filter(Boolean)
+  if (orderIds.length === 0) return orders
+
+  try {
+    const planMap = await installmentService.getPlansByOrderIds(orderIds)
+    if (!planMap || planMap.size === 0) return orders
+    const paymentMap = await installmentService.getPaymentsByPlanIds(
+      [...planMap.values()].map((plan) => plan.id)
+    )
+
+    orders.forEach((order) => {
+      const orderId = String(order.ID || order.OrderID || '').trim()
+      const plan = planMap.get(orderId)
+      if (!plan) return
+
+      order.InstallmentPlan = plan
+      order.PaymentStatus = plan.paymentStatus
+      order.PaidAmount = plan.paidAmount
+      order.RemainingAmount = plan.remainingAmount
+      order.PaymentDueDate = plan.dueDate
+      order.DepositPercent = plan.depositPercent
+      order.DepositAmount = plan.depositAmount
+      order.InstallmentPayments = paymentMap.get(Number(plan.id)) || []
+    })
+  } catch (error) {
+    console.warn('[orderService] ไม่สามารถ enrich installment plans:', error.message || error)
+  }
+
+  return orders
+}
+
 /** จัดกลุ่มแถวตาราง order (หลายแถวต่อออเดอร์) เป็นออเดอร์เดียว — รูปแบบเดียวกับ getAllOrders (แอดมิน) */
 async function buildAdminOrdersFromRawRows(rawRows) {
   const ordersMap = new Map()
@@ -220,6 +254,7 @@ async function buildAdminOrdersFromRawRows(rawRows) {
 
   await enrichOrderItemsWithProductId(ordersData)
   await enrichOrdersWithUsernames(ordersData)
+  await enrichOrdersWithInstallmentPlans(ordersData)
   return ordersData
 }
 
@@ -380,6 +415,7 @@ export const orderService = {
 
     const orders = Array.from(ordersMap.values())
     await enrichOrderItemsWithProductId(orders)
+    await enrichOrdersWithInstallmentPlans(orders)
     return orders
   },
 

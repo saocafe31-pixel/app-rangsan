@@ -32,6 +32,41 @@
 
 <!-- progress-log-entries -->
 
+### 2026-06-12 — [feat] รายละเอียดและชำระยอดคงเหลือแบ่งชำระ
+- **สรุป:** แอดมินเห็นรายละเอียดแผนแบ่งชำระและประวัติการชำระในหน้าจัดการออเดอร์; ลูกค้าเห็นแผนแบ่งชำระในหน้าประวัติออเดอร์ และกดชำระยอดคงเหลือได้ด้วยเครดิตหรือโอนเงินพร้อมแนบสลิป
+- **ไฟล์หลัก:** `src/services/installmentService.js`, `src/services/orderService.js`, `src/hooks/useOrders.js`, `src/pages/AdminOrders.jsx`, `src/pages/History.jsx`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `ReadLints`, `npm run test:run -- src/services/installmentService.test.js` (5 tests), `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** การชำระยอดคงเหลือใช้ยอดคงเหลือเต็มจำนวนของแผน; หากชำระด้วยเครดิตจะหักเครดิตก่อนบันทึก payment, หากโอนเงินจะอัปโหลดสลิปไป bucket `order-slips`
+
+### 2026-06-12 — [feat] แยกแบ่งชำระออกจากวิธีชำระ
+- **สรุป:** ปรับ Checkout ให้ `แบ่งชำระ` เป็นตัวเลือกแผนชำระแยกจากวิธีชำระเงินจริง; เมื่อเปิดแบ่งชำระ ลูกค้าเลือกได้ว่าจะจ่ายงวดแรกด้วย `โอนเงิน` หรือ `เครดิต`; ระบบใช้ยอดงวดแรกในการสร้าง QR/เช็กเครดิต/บันทึก installment payment และยังเก็บ `PaymentMethod` ของออเดอร์เป็นช่องทางจ่ายจริง
+- **ไฟล์หลัก:** `src/pages/Checkout.jsx`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `ReadLints`, `npm run test:run -- src/services/installmentService.test.js` (5 tests), `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** กรณีจ่ายงวดแรกด้วยเครดิต ระบบตัดเครดิตเฉพาะยอดงวดแรกและบันทึก payment ของแผนหลังตัดเครดิตสำเร็จ
+
+### 2026-06-12 — [feat] Checkout แบ่งชำระตามสิทธิ์อีเมล
+- **สรุป:** Checkout ตรวจสิทธิ์แบ่งชำระจาก settings key `installment_payments`; แสดงช่องทาง `แบ่งชำระ` เฉพาะ user ที่ได้รับสิทธิ์; ให้กำหนดเปอร์เซ็นต์งวดแรกและวันครบกำหนด พร้อมคำนวณยอดงวดแรก/ยอดคงเหลือ, สร้าง QR/สลิปตามยอดงวดแรก และสร้าง `installment_plans` หลังสั่งซื้อ
+- **ไฟล์หลัก:** `src/pages/Checkout.jsx`, `src/services/installmentService.js`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `ReadLints`, `npm run test:run -- src/services/installmentService.test.js` (5 tests), `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ต้องรัน migration `20260612170500_installment_payments_foundation.sql` บน Supabase project จริงก่อนใช้ checkout แบบแบ่งชำระ
+
+### 2026-06-12 — [feat] ตั้งค่าแอดมินสำหรับแบ่งชำระ
+- **สรุป:** เพิ่ม card `แบ่งชำระ` ในหน้า `AdminSettings` ให้เปิด/ปิดฟีเจอร์ เลือกอีเมลลูกค้าจากรายชื่อ users แก้รายการอีเมลที่อนุญาต และตั้งวันแจ้งเตือนล่วงหน้าก่อนครบกำหนด; บันทึกลง settings key `installment_payments` และล้าง cache ของ `installmentService`
+- **ไฟล์หลัก:** `src/pages/AdminSettings.jsx`, `docs/SETTINGS_GUIDE.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `ReadLints`, `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ขั้นนี้ยังไม่แสดงตัวเลือกแบ่งชำระใน Checkout และยังไม่ส่งแจ้งเตือนจริง ต้องต่อ UI checkout/order และ scheduler ในขั้นถัดไป
+
+### 2026-06-12 — [feat] Foundation แบ่งชำระออเดอร์
+- **สรุป:** เพิ่ม schema foundation สำหรับแผนแบ่งชำระ, รายการชำระ, ตารางแจ้งเตือนครบกำหนด; เพิ่ม `installmentService` สำหรับ settings/คำนวณยอด/สร้างแผน/บันทึกยอดชำระ และให้ `orderService` enrich ออเดอร์ด้วยสถานะชำระถ้ามีแผน
+- **ไฟล์หลัก:** `supabase/migrations/20260612170500_installment_payments_foundation.sql`, `src/services/installmentService.js`, `src/services/installmentService.test.js`, `src/services/orderService.js`, `docs/API_REFERENCE.md`, `docs/SETTINGS_GUIDE.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test:run -- src/services/installmentService.test.js` (5 tests), `npm run build`, `ReadLints`
+- **ลบไฟล์ชั่วคราว:** `supabase/migrations/20260612100557_installment_payments_foundation.sql` (ไฟล์เปล่าที่ CLI สร้างค้างไว้)
+- **หมายเหตุ:** `supabase migration new` ค้างหลังเริ่มคำสั่ง จึงหยุด process และใช้ migration file ที่สร้างตาม pattern repo ด้วยตนเอง; ต้องรัน migration นี้บน Supabase project ที่ตรงกับ `.env.local` ก่อนต่อ UI ใช้งานจริง
+
 ### 2026-06-12 — [fix/UX] จัดรูปแบบ Excel รายงานออเดอร์ละเอียด
 - **สรุป:** เพิ่มคอลัมน์ `วันที่สรุปรายวัน` และ `UserEmail` ในชีต `ยอดรวมตามออเดอร์`; เพิ่ม style ให้ทุกชีต เช่น header สีเขียว, border, alternating rows, number format, column width และ freeze header row
 - **ไฟล์หลัก:** `src/utils/orderDetailReportExport.js`, `src/utils/orderDetailReportExport.test.js`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`

@@ -4,6 +4,7 @@ import { orderService } from '../services/orderService'
 import { imageService } from '../services/imageService'
 import { productService } from '../services/productService'
 import { creditService } from '../services/creditService'
+import { calculateInstallmentAmounts, installmentService } from '../services/installmentService'
 import { getFeaturesSettings } from '../services/shopSettingsService'
 import { invalidateByPrefix } from '../utils/cache'
 import { supabase } from '../utils/supabase'
@@ -95,6 +96,12 @@ export default function Checkout({ user }) {
   const [slipPreview, setSlipPreview] = useState(null)
   const [loading, setLoading] = useState(false)
   const [creditBalance, setCreditBalance] = useState(0)
+  const [installmentAllowed, setInstallmentAllowed] = useState(false)
+  const [isInstallmentEnabled, setIsInstallmentEnabled] = useState(false)
+  const [installmentForm, setInstallmentForm] = useState({
+    depositPercent: '50',
+    dueDate: ''
+  })
   const [shippingSettings, setShippingSettings] = useState({
     pickupEnabled: true,
     deliveryEnabled: true
@@ -199,10 +206,29 @@ export default function Checkout({ user }) {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    installmentService
+      .isInstallmentAllowedForUser(user?.email)
+      .then((allowed) => {
+        if (!cancelled) setInstallmentAllowed(allowed)
+      })
+      .catch((error) => {
+        console.warn('[Checkout] installment permission check failed:', error.message || error)
+        if (!cancelled) setInstallmentAllowed(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.email])
+
+  useEffect(() => {
     if (!features.showCreditTopUp && formData.paymentMethod === 'credit') {
       setFormData((f) => ({ ...f, paymentMethod: 'transfer' }))
     }
-  }, [features.showCreditTopUp])
+    if (!installmentAllowed && isInstallmentEnabled) {
+      setIsInstallmentEnabled(false)
+    }
+  }, [features.showCreditTopUp, installmentAllowed, isInstallmentEnabled, formData.paymentMethod])
 
   const subtotal = getSubtotal()
   const discountAmount = discount?.amount || 0
@@ -304,12 +330,28 @@ export default function Checkout({ user }) {
   const freeShippingSupplierKeys = unionFreeShippingSupplierKeysFromPromotions(promotions)
   const freeShippingAmount = Math.max(0, Math.round((shippingCost - effectiveShippingCost) * 100) / 100)
   const total = subtotal - discountAmount - promotionDiscount + effectiveShippingCost
+  const installmentPercent = Math.max(0, Math.min(100, Number(installmentForm.depositPercent) || 0))
+  const installmentDepositAmount = Math.round(((Math.max(0, total) * installmentPercent) / 100) * 100) / 100
+  const installmentAmounts = calculateInstallmentAmounts(
+    total,
+    installmentPercent,
+    installmentDepositAmount,
+    installmentForm.dueDate || null
+  )
+  const checkoutPaymentAmount = isInstallmentEnabled ? installmentAmounts.depositAmount : total
+  const todayInputDate = new Date().toISOString().slice(0, 10)
 
   useEffect(() => {
     if (isFromPO || supplierGroups.length <= 1) {
       setCheckoutPayMode('combined')
     }
   }, [isFromPO, supplierGroups.length])
+
+  useEffect(() => {
+    if (isInstallmentEnabled) {
+      setCheckoutPayMode('combined')
+    }
+  }, [isInstallmentEnabled])
 
   const cartSupplierFingerprint = useMemo(() => {
     if (isFromPO || !cart.length) return '_po'
@@ -326,8 +368,8 @@ export default function Checkout({ user }) {
   useEffect(() => {
     const hidePromptPay =
       formData.paymentMethod !== 'transfer' ||
-      total <= 0 ||
-      (multiSupplier && checkoutPayMode === 'separate')
+      checkoutPaymentAmount <= 0 ||
+      (!isInstallmentEnabled && multiSupplier && checkoutPayMode === 'separate')
     if (hidePromptPay) {
       setPromptPayQrUrl(null)
       setPromptPayQrError(null)
@@ -357,7 +399,7 @@ export default function Checkout({ user }) {
           setPromptPayQrError('ไลบรารี QR ไม่พร้อม')
           return
         }
-        const amount = Number(total.toFixed(2))
+        const amount = Number(checkoutPaymentAmount.toFixed(2))
         const payload = generatePayload(PROMPTPAY_ID, { amount })
         return qr.toDataURL(payload, { width: 280, margin: 2 })
       })
@@ -386,7 +428,7 @@ export default function Checkout({ user }) {
       cancelled = true
       if (qrLoadTimeoutRef.current) clearTimeout(qrLoadTimeoutRef.current)
     }
-  }, [formData.paymentMethod, total, multiSupplier, checkoutPayMode])
+  }, [formData.paymentMethod, checkoutPaymentAmount, multiSupplier, checkoutPayMode, isInstallmentEnabled])
 
   // ตรวจสอบโปรโมชั่นที่ใช้ได้
   const checkPromotions = async () => {
@@ -1108,8 +1150,60 @@ export default function Checkout({ user }) {
       return
     }
 
+    if (isInstallmentEnabled) {
+      if (!installmentAllowed) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'ยังไม่มีสิทธิ์แบ่งชำระ',
+          text: 'บัญชีนี้ยังไม่ได้รับสิทธิ์แบ่งชำระจากแอดมิน'
+        })
+        return
+      }
+      if (installmentPercent <= 0 || installmentPercent >= 100) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'เปอร์เซ็นต์ไม่ถูกต้อง',
+          text: 'กรุณากำหนดเปอร์เซ็นต์งวดแรกมากกว่า 0 และน้อยกว่า 100'
+        })
+        return
+      }
+      if (!installmentForm.dueDate) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'กรุณากำหนดวันครบกำหนด',
+          text: 'เลือกวันที่ต้องชำระยอดคงเหลือ'
+        })
+        return
+      }
+      if (installmentForm.dueDate < todayInputDate) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'วันครบกำหนดไม่ถูกต้อง',
+          text: 'วันครบกำหนดต้องไม่ย้อนหลัง'
+        })
+        return
+      }
+      if (formData.paymentMethod === 'transfer' && !slipFile) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'กรุณาแนบสลิปงวดแรก',
+          text: 'กรุณาแนบหลักฐานการโอนยอดงวดแรกก่อนสั่งซื้อ'
+        })
+        return
+      }
+    }
+
     if (formData.paymentMethod === 'transfer') {
-      if (multiSupplier && checkoutPayMode === 'separate') {
+      if (isInstallmentEnabled) {
+        if (!slipFile) {
+          Swal.fire({
+            icon: 'warning',
+            title: 'กรุณาแนบสลิปงวดแรก',
+            text: 'กรุณาแนบหลักฐานการโอนยอดงวดแรกก่อนสั่งซื้อ'
+          })
+          return
+        }
+      } else if (multiSupplier && checkoutPayMode === 'separate') {
         for (const g of splitAllocations) {
           if (!supplierSlips[g.supplierKey]?.file) {
             Swal.fire({
@@ -1275,7 +1369,7 @@ export default function Checkout({ user }) {
       // Check credit balance if paying with credit
       if (formData.paymentMethod === 'credit') {
         const credit = await creditService.getUserCredit(user.email)
-        if (credit.balance < total) {
+        if (credit.balance < checkoutPaymentAmount) {
           Swal.close()
           Swal.fire({
             icon: 'error',
@@ -1283,7 +1377,7 @@ export default function Checkout({ user }) {
             html: `
               <div class="text-left">
                 <p class="mb-2">ยอดเครดิตปัจจุบัน: ฿${credit.balance.toLocaleString()}</p>
-                <p class="mb-2">ยอดที่ต้องชำระ: ฿${total.toLocaleString()}</p>
+                <p class="mb-2">ยอดที่ต้องชำระ: ฿${checkoutPaymentAmount.toLocaleString()}</p>
                 <p class="text-sm">กรุณาเติมเงินก่อน</p>
               </div>
             `,
@@ -1335,7 +1429,7 @@ export default function Checkout({ user }) {
       let sharedSlipURL = null
       const slipURLByKey = {}
       if (formData.paymentMethod === 'transfer') {
-        if (multiSupplier && checkoutPayMode === 'separate') {
+        if (!isInstallmentEnabled && multiSupplier && checkoutPayMode === 'separate') {
           for (const g of groups) {
             const f = supplierSlips[g.supplierKey]?.file
             if (!f) {
@@ -1384,7 +1478,7 @@ export default function Checkout({ user }) {
         const isLast = i === groups.length - 1
         const slipForGroup =
           formData.paymentMethod === 'transfer'
-            ? multiSupplier && checkoutPayMode === 'separate'
+            ? !isInstallmentEnabled && multiSupplier && checkoutPayMode === 'separate'
               ? slipURLByKey[g.supplierKey]
               : sharedSlipURL
             : null
@@ -1422,10 +1516,76 @@ export default function Checkout({ user }) {
         })
       }
 
+      const installmentPlans = []
+      if (isInstallmentEnabled) {
+        for (let i = 0; i < groups.length; i++) {
+          const groupInstallment = calculateInstallmentAmounts(
+            groups[i].orderTotal,
+            installmentPercent,
+            Math.round(((groups[i].orderTotal * installmentPercent) / 100) * 100) / 100,
+            installmentForm.dueDate
+          )
+          const plan = await installmentService.createPlan({
+            orderId: orderIds[i],
+            userEmail: user.email,
+            totalAmount: groups[i].orderTotal,
+            depositPercent: installmentPercent,
+            dueDate: installmentForm.dueDate,
+            metadata: {
+              checkoutBatchId: batchId,
+              initialPaymentMethod: formData.paymentMethod,
+              supplierTag: multiSupplier ? groups[i].supplierLabel || groups[i].supplierKey : null
+            },
+            initialPayment:
+              formData.paymentMethod === 'transfer'
+                ? {
+                    amount: groupInstallment.depositAmount,
+                    paymentMethod: 'transfer',
+                    slipURL: sharedSlipURL,
+                    note: `ชำระงวดแรก ${installmentPercent}%`,
+                    recordedBy: user.email,
+                    metadata: {
+                      source: 'checkout',
+                      depositPercent: installmentPercent
+                    }
+                  }
+                : null
+          })
+          installmentPlans.push({
+            plan,
+            orderId: orderIds[i],
+            amount: groupInstallment.depositAmount
+          })
+        }
+      }
+
       let creditDeducted = false
       if (formData.paymentMethod === 'credit') {
         try {
-          if (multiSupplier && checkoutPayMode === 'separate') {
+          if (isInstallmentEnabled) {
+            for (const item of installmentPlans) {
+              await creditService.deductCredit(
+                user.email,
+                item.amount,
+                item.orderId,
+                `ชำระงวดแรก ${installmentPercent}% ออเดอร์ ${item.orderId}`
+              )
+              await installmentService.recordPayment({
+                planId: item.plan.id,
+                orderId: item.orderId,
+                userEmail: user.email,
+                amount: item.amount,
+                paymentMethod: 'credit',
+                note: `ชำระงวดแรก ${installmentPercent}% ด้วยเครดิต`,
+                recordedBy: user.email,
+                metadata: {
+                  source: 'checkout',
+                  depositPercent: installmentPercent
+                }
+              })
+            }
+            creditDeducted = true
+          } else if (multiSupplier && checkoutPayMode === 'separate') {
             for (let i = 0; i < groups.length; i++) {
               await creditService.deductCredit(
                 user.email,
@@ -1446,6 +1606,7 @@ export default function Checkout({ user }) {
           }
         } catch (creditError) {
           console.error('Error processing credit payment:', creditError)
+          if (isInstallmentEnabled) throw creditError
         }
       }
 
@@ -1461,7 +1622,7 @@ export default function Checkout({ user }) {
       const orderIdsText =
         orderIds.length > 1 ? orderIds.join(', ') : orderIds[0]
 
-      if (formData.paymentMethod === 'credit' && creditDeducted) {
+      if (!isInstallmentEnabled && formData.paymentMethod === 'credit' && creditDeducted) {
         Swal.fire({
           icon: 'success',
           title: 'ชำระด้วยเครดิต',
@@ -1491,6 +1652,30 @@ export default function Checkout({ user }) {
               navigate('/home')
             }
           })
+        })
+      } else if (isInstallmentEnabled) {
+        const firstPaymentLabel = formData.paymentMethod === 'credit' ? 'เครดิต' : 'โอนเงิน'
+        Swal.fire({
+          icon: 'success',
+          title: 'สั่งซื้อแบบแบ่งชำระสำเร็จ!',
+          html: `
+            <div class="text-left text-sm space-y-2">
+              <p>เลขออเดอร์: <span class="font-mono font-bold">${orderIdsText}</span></p>
+              <p>ยอดรวมออเดอร์: <strong>฿${total.toLocaleString()}</strong></p>
+              <p>วิธีชำระงวดแรก: <strong>${firstPaymentLabel}</strong></p>
+              <p>ชำระงวดแรก (${installmentPercent}%): <strong class="text-emerald-600">฿${installmentAmounts.depositAmount.toLocaleString()}</strong></p>
+              <p>ยอดคงเหลือ: <strong class="text-amber-600">฿${installmentAmounts.remainingAmount.toLocaleString()}</strong></p>
+              <p>ครบกำหนดชำระ: <strong>${new Date(installmentForm.dueDate).toLocaleDateString('th-TH')}</strong></p>
+            </div>
+          `,
+          confirmButtonText: 'ดูประวัติการสั่งซื้อ'
+        }).then((result) => {
+          clearCart()
+          if (result.isConfirmed) {
+            navigate('/history')
+          } else {
+            navigate('/home')
+          }
         })
       } else {
         Swal.fire({
@@ -1786,11 +1971,40 @@ export default function Checkout({ user }) {
               )}
             </div>
 
+            {installmentAllowed && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isInstallmentEnabled}
+                    onChange={(e) => setIsInstallmentEnabled(e.target.checked)}
+                    className="mt-1 w-5 h-5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>
+                    <span className="flex items-center gap-2 text-lg font-bold text-gray-900">
+                      <Icon icon="fa-percent" className="text-emerald-600" />
+                      แบ่งชำระ
+                    </span>
+                    <span className="block text-sm text-gray-600 mt-1">
+                      เปิดเพื่อจ่ายงวดแรกตามเปอร์เซ็นต์ แล้วชำระยอดคงเหลือตามวันที่กำหนด
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+
             {/* Payment Method Selection */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-              <h2 className="text-lg font-bold text-gray-900 mb-4">วิธีการชำระเงิน</h2>
+              <h2 className="text-lg font-bold text-gray-900 mb-1">
+                {isInstallmentEnabled ? 'วิธีชำระงวดแรก' : 'วิธีการชำระเงิน'}
+              </h2>
+              <p className="text-sm text-gray-500 mb-4">
+                {isInstallmentEnabled
+                  ? 'เลือกว่าจะชำระงวดแรกด้วยการโอนเงินหรือเครดิต'
+                  : 'เลือกช่องทางชำระเงินสำหรับออเดอร์นี้'}
+              </p>
               
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                 <button
                   type="button"
                   onClick={() => setFormData({ ...formData, paymentMethod: 'transfer' })}
@@ -1817,7 +2031,7 @@ export default function Checkout({ user }) {
                         ? 'border-emerald-600 bg-emerald-50'
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
-                    disabled={creditBalance < total}
+                    disabled={creditBalance < checkoutPaymentAmount}
                   >
                     <div className="flex items-center gap-2 mb-2">
                       <Icon icon="fa-wallet" className={`text-lg ${formData.paymentMethod === 'credit' ? 'text-emerald-600' : 'text-gray-400'}`} />
@@ -1829,7 +2043,7 @@ export default function Checkout({ user }) {
                     <p className="text-xs text-emerald-600 font-bold mt-1">
                       ยอดเครดิต: ฿{creditBalance.toLocaleString()}
                     </p>
-                    {creditBalance < total && (
+                    {creditBalance < checkoutPaymentAmount && (
                       <p className="text-xs text-red-600 font-bold mt-1">
                         ยอดเครดิตไม่เพียงพอ
                       </p>
@@ -1838,7 +2052,7 @@ export default function Checkout({ user }) {
                 )}
               </div>
 
-              {formData.paymentMethod === 'credit' && creditBalance < total && (
+              {formData.paymentMethod === 'credit' && creditBalance < checkoutPaymentAmount && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
                   <p className="text-sm text-yellow-800">
                     <Icon icon="fa-exclamation-triangle" className="mr-2" />
@@ -1855,18 +2069,89 @@ export default function Checkout({ user }) {
                   )}
                 </div>
               )}
+
+              {isInstallmentEnabled && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-4 space-y-4">
+                  <div className="flex items-start gap-2 text-sm text-emerald-900">
+                    <Icon icon="fa-info-circle" className="mt-0.5 text-emerald-600" />
+                    <div>
+                      <p className="font-bold">แบ่งชำระสำหรับบัญชีที่ได้รับสิทธิ์</p>
+                      <p className="text-xs text-emerald-800">
+                        ระบบจะสร้างแผนชำระต่อออเดอร์ และบันทึกยอดงวดแรกตามวิธีชำระที่เลือก
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">
+                        ชำระงวดแรก (%)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        step={1}
+                        value={installmentForm.depositPercent}
+                        onChange={(e) => setInstallmentForm((f) => ({ ...f, depositPercent: e.target.value }))}
+                        className="w-full border border-emerald-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">กำหนดได้ 1-99% ของยอดรวมออเดอร์</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-1">
+                        วันที่ต้องชำระยอดคงเหลือ
+                      </label>
+                      <input
+                        type="date"
+                        min={todayInputDate}
+                        value={installmentForm.dueDate}
+                        onChange={(e) => setInstallmentForm((f) => ({ ...f, dueDate: e.target.value }))}
+                        className="w-full border border-emerald-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                    <div className="bg-white rounded-lg border border-emerald-100 p-3">
+                      <p className="text-gray-500 text-xs">ยอดรวมออเดอร์</p>
+                      <p className="font-bold text-gray-900">฿{total.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-white rounded-lg border border-emerald-100 p-3">
+                      <p className="text-gray-500 text-xs">ต้องชำระงวดแรก</p>
+                      <p className="font-bold text-emerald-700">
+                        ฿{installmentAmounts.depositAmount.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="bg-white rounded-lg border border-emerald-100 p-3">
+                      <p className="text-gray-500 text-xs">ยอดคงเหลือ</p>
+                      <p className="font-bold text-amber-700">
+                        ฿{installmentAmounts.remainingAmount.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  {multiSupplier && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      <Icon icon="fa-info-circle" className="mr-1" />
+                      ออเดอร์หลาย Supplier จะใช้สลิปงวดแรกรวม และระบบแยกแผนชำระตามเลขออเดอร์ของแต่ละ Supplier
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Payment Information - Only show if payment method is transfer */}
+            {/* Payment Information - transfer uses bank slip */}
             {formData.paymentMethod === 'transfer' && (
               <>
-                {multiSupplier && checkoutPayMode === 'separate' && (
+                {!isInstallmentEnabled && multiSupplier && checkoutPayMode === 'separate' && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-950">
                     <Icon icon="fa-info-circle" className="mr-2" />
                     โหมดแยกชำระ: โอนตามยอดแต่ละ Supplier ด้านล่าง และแนบสลิปแยกต่อ Supplier (ไม่แสดง QR รวมยอดเดียว)
                   </div>
                 )}
-                {(!multiSupplier || checkoutPayMode === 'combined') && (
+                {(isInstallmentEnabled || !multiSupplier || checkoutPayMode === 'combined') && (
                 <>
                 {/* Thai QR style card: แถบสี + QR + ปุ่มบันทึก */}
                 <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
@@ -1877,8 +2162,12 @@ export default function Checkout({ user }) {
                   </div>
                   <div className="p-5">
                     <div className="flex justify-between items-center mb-3">
-                      <span className="text-sm font-bold text-gray-800">ชำระผ่าน PromptPay</span>
-                      <span className="text-lg font-bold text-emerald-600">฿{total.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</span>
+                      <span className="text-sm font-bold text-gray-800">
+                        {isInstallmentEnabled ? 'ชำระงวดแรกผ่าน PromptPay' : 'ชำระผ่าน PromptPay'}
+                      </span>
+                      <span className="text-lg font-bold text-emerald-600">
+                        ฿{checkoutPaymentAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                      </span>
                     </div>
                     {promptPayQrError ? (
                       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
@@ -1919,7 +2208,7 @@ export default function Checkout({ user }) {
                             type="button"
                             onClick={() => {
                               const link = document.createElement('a')
-                              link.download = `promptpay-${total.toFixed(0)}-baht.png`
+                              link.download = `promptpay-${checkoutPaymentAmount.toFixed(0)}-baht.png`
                               link.href = promptPayQrUrl
                               link.click()
                               Swal.fire({ icon: 'success', title: 'บันทึกรูปแล้ว', timer: 1500, showConfirmButton: false, toast: true, position: 'top-end' })
@@ -1938,7 +2227,7 @@ export default function Checkout({ user }) {
                 {/* Upload Slip Section - Only for transfer */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                   <label className="block text-sm font-bold text-gray-700 mb-2">
-                    อัปโหลดสลิปโอนเงิน *
+                    {isInstallmentEnabled ? 'อัปโหลดสลิปงวดแรก *' : 'อัปโหลดสลิปโอนเงิน *'}
                   </label>
                   <div
                     className="border-2 border-dashed border-gray-300 p-8 rounded-lg text-center bg-gray-50 cursor-pointer hover:border-emerald-500 transition-colors"
@@ -2000,7 +2289,7 @@ export default function Checkout({ user }) {
                 </>
                 )}
 
-                {multiSupplier && checkoutPayMode === 'separate' && (
+                {!isInstallmentEnabled && multiSupplier && checkoutPayMode === 'separate' && (
                   <div className="space-y-4">
                     {splitAllocations.map((g, gi) => {
                       const slipDomId = `slip-supplier-${gi}`
@@ -2161,6 +2450,26 @@ export default function Checkout({ user }) {
                     <span className="text-emerald-600">฿{total.toLocaleString()}</span>
                   </div>
                 </div>
+                {isInstallmentEnabled && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 mt-3 space-y-1 text-sm">
+                    <div className="flex justify-between text-emerald-900 font-bold">
+                      <span>ชำระงวดแรก ({installmentPercent}%)</span>
+                      <span>฿{installmentAmounts.depositAmount.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-amber-800 font-bold">
+                      <span>ยอดคงเหลือ</span>
+                      <span>฿{installmentAmounts.remainingAmount.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-600 text-xs">
+                      <span>ครบกำหนดชำระ</span>
+                      <span>
+                        {installmentForm.dueDate
+                          ? new Date(installmentForm.dueDate).toLocaleDateString('th-TH')
+                          : 'ยังไม่ได้เลือก'}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button

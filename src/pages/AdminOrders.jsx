@@ -1005,6 +1005,86 @@ export default function AdminOrders({ user }) {
     }
   }
 
+  const formatMoney = (value) =>
+    `฿${Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  const getInstallmentStatusText = (status) => {
+    switch (status) {
+      case 'paid':
+        return 'ชำระครบแล้ว'
+      case 'partial':
+        return 'ชำระบางส่วน'
+      case 'overdue':
+        return 'เกินกำหนด'
+      case 'cancelled':
+        return 'ยกเลิกแผน'
+      default:
+        return 'รอชำระ'
+    }
+  }
+
+  const getInstallmentStatusClass = (status) => {
+    switch (status) {
+      case 'paid':
+        return 'bg-emerald-100 text-emerald-800'
+      case 'partial':
+        return 'bg-blue-100 text-blue-800'
+      case 'overdue':
+        return 'bg-red-100 text-red-800'
+      case 'cancelled':
+        return 'bg-gray-100 text-gray-700'
+      default:
+        return 'bg-amber-100 text-amber-800'
+    }
+  }
+
+  const paymentMethodText = (method) =>
+    method === 'credit'
+      ? '<span class="text-emerald-700 font-bold"><i class="fas fa-wallet"></i> เครดิต</span>'
+      : '<span class="text-blue-700 font-bold"><i class="fas fa-university"></i> โอนเงิน</span>'
+
+  const buildInstallmentDetailsHtml = (order) => {
+    const plan = order.InstallmentPlan
+    if (!plan) return ''
+
+    const payments = order.InstallmentPayments || []
+    const paymentsHtml = payments.length > 0
+      ? payments.map((payment, idx) => `
+          <div class="flex items-start justify-between gap-3 rounded border border-emerald-100 bg-white p-2">
+            <div>
+              <div class="font-semibold">ครั้งที่ ${idx + 1}: ${paymentMethodText(payment.paymentMethod)}</div>
+              <div class="text-xs text-gray-500">${formatDate(payment.paidAt || payment.createdAt)}</div>
+              ${payment.note ? `<div class="text-xs text-gray-600 mt-0.5">${escapeHtml(payment.note)}</div>` : ''}
+              ${payment.slipURL ? `<a href="${escapeHtml(payment.slipURL)}" target="_blank" rel="noreferrer" class="text-xs text-blue-700 underline mt-1 inline-block">เปิดสลิป</a>` : ''}
+            </div>
+            <div class="font-bold text-emerald-700">${formatMoney(payment.amount)}</div>
+          </div>
+        `).join('')
+      : '<div class="text-xs text-gray-500">ยังไม่มีรายการชำระในแผนนี้</div>'
+
+    return `
+      <div class="border-t pt-3">
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-3">
+          <div class="flex items-center justify-between gap-3">
+            <p class="font-bold text-emerald-900"><i class="fas fa-percent"></i> รายละเอียดแบ่งชำระ</p>
+            <span class="text-xs font-bold rounded-full px-2 py-1 ${getInstallmentStatusClass(plan.paymentStatus)}">${getInstallmentStatusText(plan.paymentStatus)}</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <div class="bg-white rounded border border-emerald-100 p-2"><div class="text-xs text-gray-500">ยอดรวมแผน</div><div class="font-bold">${formatMoney(plan.totalAmount)}</div></div>
+            <div class="bg-white rounded border border-emerald-100 p-2"><div class="text-xs text-gray-500">งวดแรก</div><div class="font-bold">${plan.depositPercent}% (${formatMoney(plan.depositAmount)})</div></div>
+            <div class="bg-white rounded border border-emerald-100 p-2"><div class="text-xs text-gray-500">จ่ายแล้ว</div><div class="font-bold text-emerald-700">${formatMoney(plan.paidAmount)}</div></div>
+            <div class="bg-white rounded border border-emerald-100 p-2"><div class="text-xs text-gray-500">ยอดคงเหลือ</div><div class="font-bold text-amber-700">${formatMoney(plan.remainingAmount)}</div></div>
+          </div>
+          <div class="text-sm text-gray-700">ครบกำหนดชำระ: <b>${plan.dueDate ? new Date(plan.dueDate).toLocaleDateString('th-TH') : '-'}</b></div>
+          <div class="space-y-2">
+            <p class="font-bold text-sm text-gray-800">ประวัติการชำระ</p>
+            ${paymentsHtml}
+          </div>
+        </div>
+      </div>
+    `
+  }
+
   const getStatusColor = (status) => {
     switch (status) {
       case 'รอตรวจสอบ':
@@ -2023,6 +2103,7 @@ export default function AdminOrders({ user }) {
                                     const grand =
                                       Number(order.Total || order.total || 0) ||
                                       subtotal - couponDisc - promoDisc + ship
+                                    const installmentDetailsHtml = buildInstallmentDetailsHtml(order)
                                     return `
                                     <div class="text-left space-y-3 text-gray-800">
                                       <div class="grid grid-cols-2 gap-4 mb-3">
@@ -2035,6 +2116,7 @@ export default function AdminOrders({ user }) {
                                           <div class="font-bold mt-1">${shippingMethodText}</div>
                                         </div>
                                       </div>
+                                      ${installmentDetailsHtml}
                                       <div class="border-t pt-2">
                                         <p class="font-bold mb-2">รายการสินค้า</p>
                                         ${lines}
@@ -2109,6 +2191,11 @@ export default function AdminOrders({ user }) {
                             <span className={`px-2 py-1 rounded-full text-xs font-bold ${getStatusColor(order.Status)}`}>
                               {order.Status}
                             </span>
+                            {order.InstallmentPlan && (
+                              <div className={`mt-1 w-fit px-2 py-1 rounded-full text-[10px] font-bold ${getInstallmentStatusClass(order.InstallmentPlan.paymentStatus)}`}>
+                                แบ่งชำระ: คงเหลือ {formatMoney(order.InstallmentPlan.remainingAmount)}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             <span className="text-sm text-gray-600">{formatDate(order.Timestamp || order.CreatedAt)}</span>

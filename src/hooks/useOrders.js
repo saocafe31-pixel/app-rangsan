@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../utils/supabase'
 import { getCached, setCached } from '../utils/cache'
+import { installmentService } from '../services/installmentService'
 
 export function useOrders(user) {
   const [orders, setOrders] = useState([])
@@ -90,6 +91,28 @@ export function useOrders(user) {
         const dateB = new Date(b.Timestamp || 0)
         return dateB - dateA // Descending order (newest first)
       })
+
+      try {
+        const orderIds = ordersData.map((order) => order.ID || order.OrderID).filter(Boolean)
+        const planMap = await installmentService.getPlansByOrderIds(orderIds)
+        const paymentMap = await installmentService.getPaymentsByPlanIds(
+          [...planMap.values()].map((plan) => plan.id)
+        )
+        ordersData.forEach((order) => {
+          const plan = planMap.get(String(order.ID || order.OrderID || '').trim())
+          if (!plan) return
+          order.InstallmentPlan = plan
+          order.PaymentStatus = plan.paymentStatus
+          order.PaidAmount = plan.paidAmount
+          order.RemainingAmount = plan.remainingAmount
+          order.PaymentDueDate = plan.dueDate
+          order.DepositPercent = plan.depositPercent
+          order.DepositAmount = plan.depositAmount
+          order.InstallmentPayments = paymentMap.get(Number(plan.id)) || []
+        })
+      } catch (installmentError) {
+        console.warn('[useOrders] ไม่สามารถ enrich installment plans:', installmentError.message || installmentError)
+      }
 
       setOrders(ordersData)
       setCached(cacheKey, ordersData)

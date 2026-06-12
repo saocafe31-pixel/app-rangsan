@@ -37,6 +37,9 @@
 | `user_approvals` | คำขออนุมัติ UserType (แฟรนไชส์ ฯลฯ) | AdminUserApproval, Profile, AdminFranchiseList |
 | `franchise_stock` | สต็อกแฟรนไชส์ (รายร้าน) | franchiseStockService, AdminFranchiseStock, แฟรนไชส์ |
 | `franchise_stock_logs` | บันทึกเข้า/ออกสต็อกแฟรนไชส์ | franchiseStockService |
+| `installment_plans` | แผนแบ่งชำระต่อ `OrderID` (ยอดรวม, เปอร์เซ็นต์งวดแรก, ชำระแล้ว, คงเหลือ, กำหนดชำระ) | installmentService, orderService |
+| `installment_payments` | รายการบันทึกยอดชำระของแผนแบ่งชำระ | installmentService |
+| `installment_reminders` | ตารางนัดแจ้งเตือนก่อนครบกำหนดชำระ | installmentService, งาน scheduler ในอนาคต |
 
 ---
 
@@ -56,6 +59,7 @@
 | **taxInvoiceService** | `taxInvoiceService.js` | สร้าง/อัปเดต/ดึงใบกำกับภาษี (tax_invoices) |
 | **notificationService** | `notificationService.js` | สร้าง/อ่านการแจ้งเตือน, getUnreadCount |
 | **franchiseStockService** | `franchiseStockService.js` | สต็อกแฟรนไชส์, โอนเข้า/ออก, franchise_stock_logs, ผูกกับ order |
+| **installmentService** | `installmentService.js` | อ่าน settings สิทธิ์แบ่งชำระ, คำนวณยอดงวดแรก/คงเหลือ, สร้างแผน, บันทึกยอดชำระ |
 | **printService** | `printService.js` | พิมพ์ใบเสร็จ/ใบกำกับ/ใบปะหน้า (ใช้ getShopInfo, getVatRate; ไม่เขียน DB โดยตรง) |
 | **imageService** | `imageService.js` | อัปโหลดรูป (slip, signature ฯลฯ) ไป Storage |
 

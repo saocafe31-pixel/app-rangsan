@@ -3,8 +3,15 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../utils/supabase'
 import { SHOP_INFO } from '../utils/constants'
 import { clearShopInfoCache, clearVatCache, clearMaintenanceCache, clearFeaturesCache, clearNotificationsCache } from '../services/shopSettingsService'
+import { installmentService } from '../services/installmentService'
 import { imageService } from '../services/imageService'
 import { supplierPinLockService } from '../services/supplierPinLockService'
+import { fetchCustomersForVisibilityPicker } from '../services/userDirectoryService'
+import {
+  allowedViewerEmailsToFormText,
+  mergeEmailIntoAllowedViewerText,
+  parseAllowedViewerEmailsFromText
+} from '../utils/helpers'
 import SignaturePad from '../components/SignaturePad'
 import Header from '../components/common/Header'
 import Sidebar from '../components/common/Sidebar'
@@ -41,6 +48,14 @@ export default function AdminSettings({ user }) {
   const [vatRate, setVatRate] = useState(7)
   const [maintenanceForm, setMaintenanceForm] = useState({ enabled: false, message: 'กำลังปรับปรุงระบบ' })
   const [featuresForm, setFeaturesForm] = useState({ showCreditTopUp: true, allowCoupon: true, allowPromotion: true })
+  const [installmentForm, setInstallmentForm] = useState({
+    enabled: false,
+    allowedEmailsText: '',
+    reminderDaysBeforeText: '3, 2'
+  })
+  const [installmentCustomerList, setInstallmentCustomerList] = useState([])
+  const [installmentCustomersLoading, setInstallmentCustomersLoading] = useState(false)
+  const [installmentSelectSeq, setInstallmentSelectSeq] = useState(0)
   const [notificationsForm, setNotificationsForm] = useState({ lowStockThreshold: 5, orderAlertEmail: '' })
   const [uiTextsForm, setUiTextsForm] = useState({ welcome_message: '', footer_text: '' })
   const [showKeyValueList, setShowKeyValueList] = useState(false)
@@ -71,6 +86,25 @@ export default function AdminSettings({ user }) {
 
   useEffect(() => {
     fetchSettings()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setInstallmentCustomersLoading(true)
+    fetchCustomersForVisibilityPicker()
+      .then((list) => {
+        if (!cancelled) setInstallmentCustomerList(list || [])
+      })
+      .catch((error) => {
+        console.error('fetchCustomersForVisibilityPicker:', error)
+        if (!cancelled) setInstallmentCustomerList([])
+      })
+      .finally(() => {
+        if (!cancelled) setInstallmentCustomersLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const fetchSupplierPinLocks = async () => {
@@ -152,6 +186,29 @@ export default function AdminSettings({ user }) {
   }, [items])
 
   useEffect(() => {
+    const row = items.find((i) => i.key === 'installment_payments')
+    const v = row?.value
+    if (v && typeof v === 'object') {
+      const reminderDays = Array.isArray(v.reminderDaysBefore)
+        ? v.reminderDaysBefore
+        : Array.isArray(v.reminder_days_before)
+          ? v.reminder_days_before
+          : [3, 2]
+      setInstallmentForm({
+        enabled: v.enabled === true,
+        allowedEmailsText: allowedViewerEmailsToFormText(v.allowedEmails || v.allowed_emails || []),
+        reminderDaysBeforeText: reminderDays.join(', ')
+      })
+    } else {
+      setInstallmentForm({
+        enabled: false,
+        allowedEmailsText: '',
+        reminderDaysBeforeText: '3, 2'
+      })
+    }
+  }, [items])
+
+  useEffect(() => {
     const row = items.find((i) => i.key === 'notifications')
     const v = row?.value
     if (v && typeof v === 'object') {
@@ -226,6 +283,50 @@ export default function AdminSettings({ user }) {
       if (error) throw error
       clearFeaturesCache()
       Swal.fire({ icon: 'success', title: 'บันทึกฟีเจอร์แล้ว', timer: 1500, showConfirmButton: false })
+      fetchSettings()
+    } catch (error) {
+      Swal.fire({ icon: 'error', title: 'บันทึกไม่สำเร็จ', text: error.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const saveInstallmentPayments = async () => {
+    const allowedEmails = parseAllowedViewerEmailsFromText(installmentForm.allowedEmailsText || '')
+    const reminderDaysBefore = [
+      ...new Set(
+        String(installmentForm.reminderDaysBeforeText || '')
+          .split(/[\s,;\n]+/)
+          .map((v) => Math.max(0, Math.round(Number(v) || 0)))
+          .filter((v) => v > 0)
+      )
+    ]
+
+    if (installmentForm.enabled && allowedEmails.length === 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'กรุณาเลือกอีเมล',
+        text: 'เมื่อเปิดแบ่งชำระ ต้องระบุอีเมลลูกค้าที่อนุญาตอย่างน้อย 1 รายการ'
+      })
+      return
+    }
+
+    try {
+      setSaving(true)
+      const value = {
+        enabled: installmentForm.enabled === true,
+        allowedEmails,
+        reminderDaysBefore: reminderDaysBefore.length > 0 ? reminderDaysBefore : [3, 2]
+      }
+      const { error } = await supabase
+        .from('settings')
+        .upsert(
+          { key: 'installment_payments', value, updatedat: new Date().toISOString() },
+          { onConflict: 'key' }
+        )
+      if (error) throw error
+      installmentService.clearSettingsCache()
+      Swal.fire({ icon: 'success', title: 'บันทึกตั้งค่าแบ่งชำระแล้ว', timer: 1500, showConfirmButton: false })
       fetchSettings()
     } catch (error) {
       Swal.fire({ icon: 'error', title: 'บันทึกไม่สำเร็จ', text: error.message })
@@ -842,6 +943,112 @@ export default function AdminSettings({ user }) {
                   <span>เปิดใช้โปรโมชั่น (Checkout, หน้าสินค้า)</span>
                 </label>
                 <button type="button" onClick={saveFeatures} disabled={saving} className="mt-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50">บันทึกฟีเจอร์</button>
+              </div>
+            </div>
+
+            {/* แบ่งชำระ (key: installment_payments) */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+              <h2 className="text-lg font-bold text-gray-800 mb-1 flex items-center gap-2">
+                <Icon icon="fa-percent" />
+                แบ่งชำระ
+              </h2>
+              <p className="text-sm text-gray-500 mb-4">
+                เปิดฟังก์ชันแบ่งชำระเฉพาะอีเมลลูกค้าที่เลือก และตั้งจำนวนวันแจ้งเตือนก่อนครบกำหนด
+              </p>
+              <div className="space-y-4">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={installmentForm.enabled}
+                    onChange={(e) => setInstallmentForm((f) => ({ ...f, enabled: e.target.checked }))}
+                    className="mt-1 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span>
+                    <span className="block font-medium text-gray-800">เปิดใช้งานแบ่งชำระ</span>
+                    <span className="block text-xs text-gray-500">
+                      Checkout จะแสดงตัวเลือกนี้เฉพาะลูกค้าที่อีเมลอยู่ในรายการด้านล่าง
+                    </span>
+                  </span>
+                </label>
+
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    เพิ่มจากรายชื่อลูกค้า
+                  </label>
+                  <select
+                    key={installmentSelectSeq}
+                    defaultValue=""
+                    disabled={installmentCustomersLoading}
+                    onChange={(e) => {
+                      const email = e.target.value
+                      if (!email) return
+                      setInstallmentForm((f) => ({
+                        ...f,
+                        allowedEmailsText: mergeEmailIntoAllowedViewerText(f.allowedEmailsText, email)
+                      }))
+                      setInstallmentSelectSeq((n) => n + 1)
+                    }}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm"
+                  >
+                    <option value="">
+                      {installmentCustomersLoading ? 'กำลังโหลดรายชื่อ...' : '-- เลือกเพื่อเพิ่มอีเมล --'}
+                    </option>
+                    {installmentCustomerList.map((customer) => (
+                      <option key={customer.email.toLowerCase()} value={customer.email}>
+                        {customer.optionLabel}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    รายชื่อนี้ดึงจากตาราง users และไม่รวมบัญชีแอดมิน
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    อีเมลที่อนุญาตให้แบ่งชำระ
+                  </label>
+                  <textarea
+                    value={installmentForm.allowedEmailsText}
+                    onChange={(e) => setInstallmentForm((f) => ({ ...f, allowedEmailsText: e.target.value }))}
+                    rows={3}
+                    placeholder="customer@example.com, franchise@example.com"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    คั่นได้ด้วยจุลภาค เว้นวรรค หรือขึ้นบรรทัดใหม่ ระบบจะตัดอีเมลซ้ำให้อัตโนมัติเมื่อบันทึก
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">
+                    แจ้งเตือนล่วงหน้าก่อนครบกำหนด (วัน)
+                  </label>
+                  <input
+                    type="text"
+                    value={installmentForm.reminderDaysBeforeText}
+                    onChange={(e) => setInstallmentForm((f) => ({ ...f, reminderDaysBeforeText: e.target.value }))}
+                    placeholder="3, 2"
+                    className="w-full md:w-64 border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1.5">
+                    เช่น `3, 2` หมายถึงเตือนก่อนครบกำหนด 3 วัน และ 2 วัน
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  <Icon icon="fa-info-circle" className="mr-2" />
+                  การแจ้งเตือนจะทำงานจริงหลังต่อ scheduler/cron ในขั้นถัดไป ตอนนี้เป็นการบันทึกค่าตั้งค่าและ schedule foundation
+                </div>
+
+                <button
+                  type="button"
+                  onClick={saveInstallmentPayments}
+                  disabled={saving}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  บันทึกตั้งค่าแบ่งชำระ
+                </button>
               </div>
             </div>
 
