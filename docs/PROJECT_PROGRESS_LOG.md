@@ -1,5 +1,37 @@
 # Project Progress Log
 
+## 2026-06-12 — Excel Report Formatting and Order Total Columns
+
+### Scope
+- `fix/UX` — ปรับรูปแบบไฟล์ Excel รายงานออเดอร์ละเอียดและเพิ่มคอลัมน์ที่ช่วยอ่านข้อมูล โดยไม่เปลี่ยน schema หรือข้อมูลจริงในฐานข้อมูล
+
+### Files
+- `src/utils/orderDetailReportExport.js`
+- `src/utils/orderDetailReportExport.test.js`
+- `docs/PROJECT_PROGRESS_LOG.md`
+- `docs/PROGRESS_LOG.md`
+
+### Summary
+- เพิ่มคอลัมน์ `วันที่สรุปรายวัน` และ `UserEmail` ในชีต `ยอดรวมตามออเดอร์`
+- เพิ่ม style ให้ workbook ทุกชีต เช่น header สีเขียว ตัวหนา สีตัวอักษรขาว, border, alternating row background, number format และความกว้างคอลัมน์ตามข้อมูล
+- เพิ่ม freeze header row ในทุก worksheet เพื่อให้เลื่อนดูรายงานได้เป็นระเบียบขึ้น
+
+### Impact
+- ชีต `ยอดรวมตามออเดอร์` อ่านง่ายขึ้นเมื่อตรวจออเดอร์ย้อนหลัง เพราะเห็นวันที่และอีเมลลูกค้าคู่กับยอดรวมทันที
+- ไฟล์ Excel/Google Sheets ที่ export มีรูปแบบตารางชัดเจนขึ้นทุกชีต โดยยังคงรูปแบบ Excel XML `.xls` เดิมและไม่เพิ่ม dependency
+
+### Verification
+- `npm run test:run -- src/utils/orderDetailReportExport.test.js` ผ่าน 6 tests
+- `npm run build` ผ่าน
+- `ReadLints` ไม่พบ error ในไฟล์ที่แก้
+
+### Rollback
+- คืน header/data ของชีต `ยอดรวมตามออเดอร์` กลับก่อนเพิ่ม `วันที่สรุปรายวัน` และ `UserEmail`
+- คืน `createOrderDetailReportExcelXml()` กลับเป็น XML แบบไม่มี styles/columns/freeze panes
+
+### Next Step
+- Export รายงานจริงแล้วเปิดใน Google Sheets/Excel เพื่อตรวจความกว้างคอลัมน์และสี header บนข้อมูลจำนวนมาก
+
 ## 2026-06-12 — Admin Filter Loading UX
 
 ### Scope

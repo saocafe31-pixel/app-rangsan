@@ -127,6 +127,8 @@ describe('orderDetailReportExport', () => {
     const orderTotalSheet = workbook.sheets.find((sheet) => sheet.name === 'ยอดรวมตามออเดอร์')
     expect(orderTotalSheet.rows[1]).toEqual([
       'O1',
+      '2026-06-10',
+      'alice@example.com',
       'Supplier A, Supplier B',
       'transfer',
       250,
@@ -213,5 +215,8 @@ describe('orderDetailReportExport', () => {
     const xml = createOrderDetailReportExcelXml(workbook.sheets)
     expect(xml).toContain('<Worksheet ss:Name="ออเดอร์">')
     expect(xml).toContain('<Worksheet ss:Name="สรุปงบกำไรขาดทุน">')
+    expect(xml).toContain('<Style ss:ID="Header">')
+    expect(xml).toContain('<Column ss:AutoFitWidth="0"')
+    expect(xml).toContain('<FreezePanes/>')
   })
 })

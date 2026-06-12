@@ -288,6 +288,8 @@ export function buildOrderDetailReportWorkbook({
   const orderTotalRows = [
     [
       'เลขที่ออเดอร์',
+      'วันที่สรุปรายวัน',
+      'UserEmail',
       'ซัพพลายเออร์',
       'ช่องทางชำระ',
       'ยอดซื้อรวม',
@@ -299,6 +301,8 @@ export function buildOrderDetailReportWorkbook({
     ],
     ...orderRows.map((row) => [
       row.orderId,
+      row.date,
+      row.userEmail,
       row.supplier,
       row.paymentMethod,
       row.itemRevenue,
@@ -494,18 +498,105 @@ function escapeXml(value) {
     .replace(/"/g, '&quot;')
 }
 
-function cellXml(value) {
+function textLength(value) {
+  return String(value ?? '').length
+}
+
+function columnWidth(rows, columnIndex) {
+  const maxLen = Math.max(
+    8,
+    ...((rows || []).slice(0, 200).map((row) => textLength(row?.[columnIndex])) || [])
+  )
+  return Math.min(240, Math.max(70, maxLen * 8 + 18))
+}
+
+function columnsXml(rows) {
+  const columnCount = Math.max(0, ...(rows || []).map((row) => row?.length || 0))
+  return Array.from({ length: columnCount }, (_, index) => {
+    return `<Column ss:AutoFitWidth="0" ss:Width="${columnWidth(rows, index)}"/>`
+  }).join('')
+}
+
+function stylesXml() {
+  return `<Styles>
+  <Style ss:ID="Default" ss:Name="Normal">
+    <Alignment ss:Vertical="Center"/>
+    <Font ss:FontName="Arial" ss:Size="10"/>
+  </Style>
+  <Style ss:ID="Header">
+    <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+    <Font ss:FontName="Arial" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/>
+    <Interior ss:Color="#047857" ss:Pattern="Solid"/>
+    <Borders>
+      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#065F46"/>
+      <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D1FAE5"/>
+      <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D1FAE5"/>
+      <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D1FAE5"/>
+    </Borders>
+  </Style>
+  <Style ss:ID="TextCell">
+    <Alignment ss:Vertical="Center" ss:WrapText="1"/>
+    <Borders>
+      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    </Borders>
+  </Style>
+  <Style ss:ID="NumberCell">
+    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+    <NumberFormat ss:Format="#,##0.##"/>
+    <Borders>
+      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    </Borders>
+  </Style>
+  <Style ss:ID="AltTextCell">
+    <Alignment ss:Vertical="Center" ss:WrapText="1"/>
+    <Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/>
+    <Borders>
+      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    </Borders>
+  </Style>
+  <Style ss:ID="AltNumberCell">
+    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
+    <Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/>
+    <NumberFormat ss:Format="#,##0.##"/>
+    <Borders>
+      <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    </Borders>
+  </Style>
+</Styles>`
+}
+
+function worksheetOptionsXml() {
+  return `<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+  <FreezePanes/>
+  <FrozenNoSplit/>
+  <SplitHorizontal>1</SplitHorizontal>
+  <TopRowBottomPane>1</TopRowBottomPane>
+  <ActivePane>2</ActivePane>
+</WorksheetOptions>`
+}
+
+function cellXml(value, rowIndex) {
   const isNum = typeof value === 'number' && Number.isFinite(value)
   const type = isNum ? 'Number' : 'String'
-  return `<Cell><Data ss:Type="${type}">${escapeXml(value)}</Data></Cell>`
+  const style =
+    rowIndex === 0
+      ? 'Header'
+      : isNum
+        ? rowIndex % 2 === 0
+          ? 'AltNumberCell'
+          : 'NumberCell'
+        : rowIndex % 2 === 0
+          ? 'AltTextCell'
+          : 'TextCell'
+  return `<Cell ss:StyleID="${style}"><Data ss:Type="${type}">${escapeXml(value)}</Data></Cell>`
 }
 
 export function createOrderDetailReportExcelXml(sheets) {
   const worksheets = (sheets || [])
     .map(
-      (sheet) => `<Worksheet ss:Name="${escapeXml(sheet.name)}"><Table>${(sheet.rows || [])
-        .map((row) => `<Row>${(row || []).map(cellXml).join('')}</Row>`)
-        .join('')}</Table></Worksheet>`
+      (sheet) => `<Worksheet ss:Name="${escapeXml(sheet.name)}"><Table>${columnsXml(sheet.rows)}${(sheet.rows || [])
+        .map((row, rowIndex) => `<Row ss:AutoFitHeight="1">${(row || []).map((cell) => cellXml(cell, rowIndex)).join('')}</Row>`)
+        .join('')}</Table>${worksheetOptionsXml()}</Worksheet>`
     )
     .join('')
 
@@ -515,6 +606,7 @@ export function createOrderDetailReportExcelXml(sheets) {
  xmlns:o="urn:schemas-microsoft-com:office:office"
  xmlns:x="urn:schemas-microsoft-com:office:excel"
  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+${stylesXml()}
 ${worksheets}
 </Workbook>`
 }

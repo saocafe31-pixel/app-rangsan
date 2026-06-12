@@ -32,6 +32,13 @@
 
 <!-- progress-log-entries -->
 
+### 2026-06-12 — [fix/UX] จัดรูปแบบ Excel รายงานออเดอร์ละเอียด
+- **สรุป:** เพิ่มคอลัมน์ `วันที่สรุปรายวัน` และ `UserEmail` ในชีต `ยอดรวมตามออเดอร์`; เพิ่ม style ให้ทุกชีต เช่น header สีเขียว, border, alternating rows, number format, column width และ freeze header row
+- **ไฟล์หลัก:** `src/utils/orderDetailReportExport.js`, `src/utils/orderDetailReportExport.test.js`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test:run -- src/utils/orderDetailReportExport.test.js` (6 tests), `npm run build`, `ReadLints`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ยังใช้ Excel XML `.xls` เดิมเพื่อไม่เพิ่ม dependency; การแสดง style อาจขึ้นกับโปรแกรมที่เปิดไฟล์
+
 ### 2026-06-12 — [fix/UX] Filter หน้าแอดมินไม่ขึ้น full-page loading ระหว่างค้นหา
 - **สรุป:** แยกโหลดครั้งแรกกับ refresh หลังเปลี่ยน filter ใน `AdminOrders`, `AdminDashboard`, `AdminReports`; ค้นหา/เปลี่ยนวันที่/เลือก Supplier ยัง realtime แต่แสดง inline “กำลังอัปเดตข้อมูล...” แทน loading screen ทั้งหน้า
 - **ไฟล์หลัก:** `src/pages/AdminOrders.jsx`, `src/pages/AdminDashboard.jsx`, `src/pages/AdminReports.jsx`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`
