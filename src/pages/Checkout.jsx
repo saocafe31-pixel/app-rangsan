@@ -27,15 +27,20 @@ import {
   validateCouponSupplierScope,
   promotionAllowedForProductSupplier,
   discountSplitRatios,
+  eligibleSubtotalForSupplierScope,
+  supplierKeysForSupplierScope,
+  unionFreeShippingSupplierKeysFromPromotions,
   unionAllowedKeysFromPromotions,
   eligibleSubtotalForCoupon
 } from '../utils/couponSupplierSplitUtils'
 import { computeBundleStockMoves, getEffectiveStock } from '../utils/orderBundleLineUtils'
 import {
+  FREE_SHIPPING_PROMOTION_TYPE,
   computePromotionMoneyDiscount,
   getPromotionAppliedProductQty,
   getPromotionEligiblePaidQty,
   getPromotionPaidQty,
+  isFreeShippingPromotionEligible,
   isPromotionVisibleToCustomer,
   isPromotionWithinProductQuota,
   isPromotionWithinUsageLimits,
@@ -201,7 +206,6 @@ export default function Checkout({ user }) {
 
   const subtotal = getSubtotal()
   const discountAmount = discount?.amount || 0
-  const total = subtotal - discountAmount - promotionDiscount + shippingCost
 
   const supplierGroups = useMemo(() => {
     if (!cart.length) return []
@@ -230,8 +234,9 @@ export default function Checkout({ user }) {
     })
     const discShares = splitMoneyPool(discountAmount, discRatios)
 
+    const discountPromotions = promotions.filter((p) => Number(p.discountAmount || 0) > 0)
     const promoAllowed =
-      unionAllowedKeysFromPromotions(promotions) ?? discount?.allowedSupplierKeys ?? null
+      unionAllowedKeysFromPromotions(discountPromotions) ?? discount?.allowedSupplierKeys ?? null
     const promoRatios = discountSplitRatios(supplierKeys, paidList, {
       multiSupplier: multi,
       hasCentralSupplier: hasCentral,
@@ -264,6 +269,12 @@ export default function Checkout({ user }) {
                 : stats.map((g) => g.weight)
             )
     }
+    const freeShippingKeys = new Set(unionFreeShippingSupplierKeysFromPromotions(promotions))
+    if (freeShippingKeys.size > 0) {
+      shipShares = shipShares.map((share, i) =>
+        freeShippingKeys.has(normalizeSupplierName(stats[i].supplierKey)) ? 0 : share
+      )
+    }
     return stats.map((g, i) => {
       const orderTotal = g.paidSubtotal - discShares[i] - promoShares[i] + shipShares[i]
       return {
@@ -285,6 +296,14 @@ export default function Checkout({ user }) {
     shippingRatesRaw,
     isFromPO
   ])
+
+  const effectiveShippingCost = splitAllocations.reduce(
+    (sum, g) => sum + (Number(g.shippingShare) || 0),
+    0
+  )
+  const freeShippingSupplierKeys = unionFreeShippingSupplierKeysFromPromotions(promotions)
+  const freeShippingAmount = Math.max(0, Math.round((shippingCost - effectiveShippingCost) * 100) / 100)
+  const total = subtotal - discountAmount - promotionDiscount + effectiveShippingCost
 
   useEffect(() => {
     if (isFromPO || supplierGroups.length <= 1) {
@@ -465,6 +484,39 @@ export default function Checkout({ user }) {
 
         if (!isPromotionWithinUsageLimits(promotion, { userOrderRows: userPromoOrderRows })) {
           console.log(`[PROMO CHECK] ${promotion.Name} - Usage limit reached (per user or total)`)
+          continue
+        }
+
+        if (promotion.Type === FREE_SHIPPING_PROMOTION_TYPE) {
+          const promoAllowedKeys = parseAllowedSupplierKeys(promotion.AllowedSupplierKeys)
+          const freeShippingSupplierKeysForPromo = supplierKeysForSupplierScope(cartKeysPromo, {
+            multiSupplier: multiSupPromo,
+            hasCentralSupplier: hasCentralPromo,
+            allowedKeys: promoAllowedKeys
+          })
+          if (freeShippingSupplierKeysForPromo.length === 0) {
+            console.log(`[PROMO CHECK] ${promotion.Name} - No matching supplier for free shipping`)
+            continue
+          }
+
+          const eligibleSubtotal = eligibleSubtotalForSupplierScope(cart, {
+            multiSupplier: multiSupPromo,
+            hasCentralSupplier: hasCentralPromo,
+            allowedKeys: promoAllowedKeys
+          })
+          if (!isFreeShippingPromotionEligible(promotion, eligibleSubtotal)) {
+            console.log(
+              `[PROMO CHECK] ${promotion.Name} - Free shipping min purchase not met (required: ${promotion.MinPurchase || 0}, eligible: ${eligibleSubtotal})`
+            )
+            continue
+          }
+
+          applicablePromotions.push({
+            ...promotion,
+            freeShippingSupplierKeys: freeShippingSupplierKeysForPromo,
+            freeShippingEligibleSubtotal: eligibleSubtotal
+          })
+          console.log(`[PROMO CHECK] ${promotion.Name} - APPLIED! Free shipping for suppliers: ${freeShippingSupplierKeysForPromo.join(', ')}`)
           continue
         }
 
@@ -1353,7 +1405,8 @@ export default function Checkout({ user }) {
                   type: p.Type,
                   productId: p.ProductID || null,
                   discountAmount: p.discountAmount || 0,
-                  appliedProductQty: p.appliedProductQty || 0
+                  appliedProductQty: p.appliedProductQty || 0,
+                  freeShippingSupplierKeys: p.freeShippingSupplierKeys || []
                 }))
               : null,
           shippingCost: g.shippingShare,
@@ -2057,6 +2110,11 @@ export default function Checkout({ user }) {
                         {promo.discountAmount > 0 && (
                           <span className="ml-1">(ส่วนลด ฿{promo.discountAmount.toLocaleString()})</span>
                         )}
+                        {promo.Type === FREE_SHIPPING_PROMOTION_TYPE && promo.freeShippingSupplierKeys?.length > 0 && (
+                          <span className="ml-1">
+                            (ส่งฟรี: {promo.freeShippingSupplierKeys.join(', ')})
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2075,8 +2133,14 @@ export default function Checkout({ user }) {
                 )}
                 <div className="flex justify-between text-gray-600">
                   <span>ค่าจัดส่ง</span>
-                  <span>฿{shippingCost.toLocaleString()}</span>
+                  <span>฿{effectiveShippingCost.toLocaleString()}</span>
                 </div>
+                {freeShippingAmount > 0 && (
+                  <div className="text-xs text-emerald-700 flex justify-between gap-2">
+                    <span>โปรส่งฟรี ({freeShippingSupplierKeys.join(', ')})</span>
+                    <span>-฿{freeShippingAmount.toLocaleString()}</span>
+                  </div>
+                )}
                 <div className="text-xs text-gray-500 mt-1">
                   น้ำหนักรวม: {getTotalWeight().toLocaleString()} กรัม
                 </div>

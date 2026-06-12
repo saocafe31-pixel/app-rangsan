@@ -91,6 +91,7 @@ export default function AdminDashboard({ user }) {
   })
   const [chartPeriod, setChartPeriod] = useState('daily') // 'daily', 'monthly', 'yearly'
   const [loading, setLoading] = useState(true)
+  const [hasLoadedStats, setHasLoadedStats] = useState(false)
   const [dateRange, setDateRange] = useState({
     start: new Date(new Date().setDate(1)).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0]
@@ -525,6 +526,7 @@ export default function AdminDashboard({ user }) {
       setSupplierBreakdownRows([])
     } finally {
       setLoading(false)
+      setHasLoadedStats(true)
     }
   }
 
@@ -629,7 +631,7 @@ export default function AdminDashboard({ user }) {
     }
   }
 
-  if (loading) {
+  if (loading && !hasLoadedStats) {
     return <LoadingSpinner />
   }
 
@@ -643,7 +645,15 @@ export default function AdminDashboard({ user }) {
         <div className="flex-1 ml-0 md:ml-64 pt-16 px-6 pb-6">
           <div className="max-w-7xl mx-auto">
             <div className="mb-6">
-              <h1 className="text-xl font-bold text-gray-900 mb-4">Dashboard</h1>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <h1 className="text-xl font-bold text-gray-900">Dashboard</h1>
+                {loading && hasLoadedStats && (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-sm text-emerald-800">
+                    <Icon icon="fa-sync-alt" className="animate-spin" />
+                    กำลังอัปเดตข้อมูล...
+                  </span>
+                )}
+              </div>
               {/* สถานะระบบตอนนี้ */}
               <div className="flex flex-wrap gap-3 mb-4 p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
                 <span className="text-sm font-medium text-gray-600">สถานะระบบตอนนี้:</span>

@@ -1,12 +1,16 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../utils/supabase'
 import { productService } from '../services/productService'
+import { supplierService } from '../services/supplierService'
 import Header from '../components/common/Header'
 import Sidebar from '../components/common/Sidebar'
 import Icon from '../components/common/Icon'
 import Swal from 'sweetalert2'
 import LoadingSpinner from '../components/common/LoadingSpinner'
+import { parseAllowedSupplierKeys } from '../utils/couponSupplierSplitUtils'
+import { normalizeSupplierName } from '../utils/orderSupplierUtils'
 import {
+  FREE_SHIPPING_PROMOTION_TYPE,
   PROMOTION_TYPE_LABELS,
   PROMOTION_TARGET_CUSTOMER_TYPE_LABELS,
   computePromotionMoneyDiscount,
@@ -21,7 +25,9 @@ const PROMOTION_TYPE_HELP = {
   target_unit_price:
     'กำหนดราคาขายต่อชิ้น (เช่น 290 บาท/ชิ้น) — ส่วนลด = (ราคาปกติ − ราคาโปร) × จำนวน',
   second_item_discount:
-    'ซื้อสินค้า X อย่างน้อย 2 ชิ้น — ชิ้นที่ 2, 4, 6 … ได้ส่วนลด (บาท/ชิ้น หรือ %) ตามที่ตั้งไว้'
+    'ซื้อสินค้า X อย่างน้อย 2 ชิ้น — ชิ้นที่ 2, 4, 6 … ได้ส่วนลด (บาท/ชิ้น หรือ %) ตามที่ตั้งไว้',
+  free_shipping_min_purchase:
+    'เมื่อลูกค้าซื้อครบยอดที่กำหนดจาก Supplier ที่เข้าร่วม ระบบจะฟรีค่าจัดส่งเฉพาะ Supplier นั้น'
 }
 
 export default function AdminPromotions({ user }) {
@@ -32,6 +38,7 @@ export default function AdminPromotions({ user }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [products, setProducts] = useState([])
+  const [suppliers, setSuppliers] = useState([])
   const [productSearchTerm, setProductSearchTerm] = useState('')
   const [getProductSearchTerm, setGetProductSearchTerm] = useState('')
   const [showProductDropdown, setShowProductDropdown] = useState(false)
@@ -55,6 +62,7 @@ export default function AdminPromotions({ user }) {
     TotalUsageLimit: 0,
     TargetCustomerType: 'all',
     PromotionProductLimit: 0,
+    AllowedSupplierKeys: [],
     secondItemDiscountMode: 'percent'
   })
 
@@ -75,6 +83,7 @@ export default function AdminPromotions({ user }) {
   useEffect(() => {
     fetchPromotions()
     fetchProducts()
+    fetchSuppliers()
   }, [])
 
   // Close dropdowns when clicking outside
@@ -97,6 +106,16 @@ export default function AdminPromotions({ user }) {
       setProducts(allProducts || [])
     } catch (error) {
       console.error('Error fetching products:', error)
+    }
+  }
+
+  const fetchSuppliers = async () => {
+    try {
+      const list = await supplierService.getAllSuppliers()
+      setSuppliers(list || [])
+    } catch (error) {
+      console.error('Error fetching suppliers:', error)
+      setSuppliers([])
     }
   }
 
@@ -143,6 +162,7 @@ export default function AdminPromotions({ user }) {
       TotalUsageLimit: 0,
       TargetCustomerType: 'all',
       PromotionProductLimit: 0,
+      AllowedSupplierKeys: [],
       secondItemDiscountMode: 'percent'
     })
     setShowModal(true)
@@ -171,6 +191,7 @@ export default function AdminPromotions({ user }) {
       TotalUsageLimit: promotion.TotalUsageLimit || 0,
       TargetCustomerType: promotion.TargetCustomerType || 'all',
       PromotionProductLimit: promotion.PromotionProductLimit || 0,
+      AllowedSupplierKeys: parseAllowedSupplierKeys(promotion.AllowedSupplierKeys) || [],
       secondItemDiscountMode:
         promotion.Type === 'second_item_discount' && !(Number(promotion.DiscountPercentage) > 0)
           ? 'fixed'
@@ -190,7 +211,9 @@ export default function AdminPromotions({ user }) {
       return
     }
 
-    if (!promotionForm.ProductID || promotionForm.ProductID.trim() === '') {
+    const isFreeShippingPromotion = promotionForm.Type === FREE_SHIPPING_PROMOTION_TYPE
+
+    if (!isFreeShippingPromotion && (!promotionForm.ProductID || promotionForm.ProductID.trim() === '')) {
       Swal.fire({
         icon: 'warning',
         title: 'กรุณากรอกข้อมูล',
@@ -214,6 +237,15 @@ export default function AdminPromotions({ user }) {
           icon: 'warning',
           title: 'กรุณากรอกข้อมูล',
           text: 'กรุณากรอกจำนวนที่ได้เพิ่มที่มากกว่า 0'
+        })
+        return
+      }
+    } else if (isFreeShippingPromotion) {
+      if (promotionForm.MinPurchase <= 0) {
+        Swal.fire({
+          icon: 'warning',
+          title: 'กรุณากรอกข้อมูล',
+          text: 'กรุณากรอกยอดซื้อขั้นต่ำสำหรับโปรส่งฟรี'
         })
         return
       }
@@ -296,16 +328,25 @@ export default function AdminPromotions({ user }) {
       const promotionData = {
         Name: promotionForm.Name.trim(),
         Type: promotionForm.Type,
-        ProductID: promotionForm.ProductID.trim(),
-        GetProductID: promotionForm.GetProductID?.trim() || null,
-        BuyQuantity: Number(promotionForm.BuyQuantity) || 0,
-        GetQuantity: Number(promotionForm.GetQuantity) || 0,
+        ProductID: isFreeShippingPromotion ? null : promotionForm.ProductID.trim(),
+        GetProductID:
+          isFreeShippingPromotion || promotionForm.Type !== 'buy_x_get_y'
+            ? null
+            : promotionForm.GetProductID?.trim() || null,
+        BuyQuantity: isFreeShippingPromotion ? 0 : Number(promotionForm.BuyQuantity) || 0,
+        GetQuantity: isFreeShippingPromotion ? 0 : Number(promotionForm.GetQuantity) || 0,
         DiscountPercentage: isSecondItem
           ? secondPercent
-          : Number(promotionForm.DiscountPercentage) || 0,
-        DiscountAmount: isSecondItem ? secondFixed : Number(promotionForm.DiscountAmount) || 0,
+          : isFreeShippingPromotion
+            ? 0
+            : Number(promotionForm.DiscountPercentage) || 0,
+        DiscountAmount: isSecondItem
+          ? secondFixed
+          : isFreeShippingPromotion
+            ? 0
+            : Number(promotionForm.DiscountAmount) || 0,
         MinPurchase: Number(promotionForm.MinPurchase) || 0,
-        MaxDiscount: Number(promotionForm.MaxDiscount) || 0,
+        MaxDiscount: isFreeShippingPromotion ? 0 : Number(promotionForm.MaxDiscount) || 0,
         ValidFrom: promotionDateInputToIsoRange(promotionForm.ValidFrom, 'from'),
         ValidUntil: promotionDateInputToIsoRange(promotionForm.ValidUntil, 'until'),
         Status: promotionForm.Status,
@@ -313,7 +354,11 @@ export default function AdminPromotions({ user }) {
         UsageLimit: Number(promotionForm.UsageLimit) || 0,
         TotalUsageLimit: Number(promotionForm.TotalUsageLimit) || 0,
         TargetCustomerType: promotionForm.TargetCustomerType || 'all',
-        PromotionProductLimit: Number(promotionForm.PromotionProductLimit) || 0
+        PromotionProductLimit: isFreeShippingPromotion ? 0 : Number(promotionForm.PromotionProductLimit) || 0,
+        AllowedSupplierKeys:
+          promotionForm.AllowedSupplierKeys && promotionForm.AllowedSupplierKeys.length > 0
+            ? promotionForm.AllowedSupplierKeys
+            : null
       }
 
       if (editingPromotion) {
@@ -484,6 +529,8 @@ export default function AdminPromotions({ user }) {
         nextType === 'second_item_discount'
           ? f.DiscountAmount
           : 0,
+      ProductID: nextType === FREE_SHIPPING_PROMOTION_TYPE ? '' : f.ProductID,
+      PromotionProductLimit: nextType === FREE_SHIPPING_PROMOTION_TYPE ? 0 : f.PromotionProductLimit,
       secondItemDiscountMode:
         nextType === 'second_item_discount' ? f.secondItemDiscountMode || 'percent' : 'percent'
     }))
@@ -495,6 +542,23 @@ export default function AdminPromotions({ user }) {
 
   const getSelectedGetProduct = () => {
     return products.find(p => p.id === promotionForm.GetProductID)
+  }
+
+  const supplierOptions = useMemo(() => {
+    const set = new Set()
+    products.forEach((p) => set.add(normalizeSupplierName(p.supplier ?? p.Supplier)))
+    suppliers.forEach((s) => set.add(normalizeSupplierName(s)))
+    return [...set].filter(Boolean).sort((a, b) => a.localeCompare(b, 'th'))
+  }, [products, suppliers])
+
+  const toggleAllowedSupplier = (supplierKey) => {
+    const key = normalizeSupplierName(supplierKey)
+    setPromotionForm((f) => {
+      const current = new Set((f.AllowedSupplierKeys || []).map((k) => normalizeSupplierName(k)))
+      if (current.has(key)) current.delete(key)
+      else current.add(key)
+      return { ...f, AllowedSupplierKeys: [...current].sort((a, b) => a.localeCompare(b, 'th')) }
+    })
   }
 
   const filteredProducts = products.filter(product => {
@@ -638,6 +702,7 @@ export default function AdminPromotions({ user }) {
                         const productId = promotion.ProductID || ''
                         const status = promotion.Status || ''
                         const description = promotion.Description || ''
+                        const allowedSupplierKeys = parseAllowedSupplierKeys(promotion.AllowedSupplierKeys) || []
                         const product = products.find((p) => p.id === productId)
                         const productStock = Math.max(0, Number(product?.stock) || 0)
                         const productLimit = Math.max(0, Number(promotion.PromotionProductLimit) || 0)
@@ -662,7 +727,7 @@ export default function AdminPromotions({ user }) {
                               {getTargetCustomerTypeLabel(promotion.TargetCustomerType)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                              {productId}
+                              {productId || '-'}
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-600">
                               <div className="space-y-1">
@@ -692,7 +757,19 @@ export default function AdminPromotions({ user }) {
                                 {type === 'second_item_discount' && (
                                   <div>{formatPromotionCondition(promotion)}</div>
                                 )}
-                                {promotion.MinPurchase > 0 && (
+                                {type === FREE_SHIPPING_PROMOTION_TYPE && (
+                                  <>
+                                    {formatPromotionCondition(promotion).map((line) => (
+                                      <div key={line}>{line}</div>
+                                    ))}
+                                    <div className="text-xs">
+                                      Supplier: {allowedSupplierKeys.length > 0 ? allowedSupplierKeys.join(', ') : 'ตามกฎอัตโนมัติ'}
+                                    </div>
+                                  </>
+                                )}
+                                {promotion.MinPurchase > 0 &&
+                                  type !== 'second_item_discount' &&
+                                  type !== FREE_SHIPPING_PROMOTION_TYPE && (
                                   <div className="text-xs">ซื้อขั้นต่ำ: ฿{Number(promotion.MinPurchase).toLocaleString()}</div>
                                 )}
                               </div>
@@ -704,17 +781,23 @@ export default function AdminPromotions({ user }) {
                               {formatDate(promotion.ValidUntil)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center text-xs">
-                              <div className="text-sm font-semibold text-gray-900">
-                                ใช้แล้ว {productUsed.toLocaleString()} ชิ้น
-                              </div>
-                              {productLimit > 0 ? (
-                                <div className="text-gray-500">
-                                  เหลือ {productRemaining.toLocaleString()} / {productLimit.toLocaleString()} ชิ้น
-                                </div>
+                              {type === FREE_SHIPPING_PROMOTION_TYPE ? (
+                                <div className="text-gray-500">-</div>
                               ) : (
-                                <div className="text-gray-500">
-                                  ตามสต็อก: {productRemaining.toLocaleString()} ชิ้น
-                                </div>
+                                <>
+                                  <div className="text-sm font-semibold text-gray-900">
+                                    ใช้แล้ว {productUsed.toLocaleString()} ชิ้น
+                                  </div>
+                                  {productLimit > 0 ? (
+                                    <div className="text-gray-500">
+                                      เหลือ {productRemaining.toLocaleString()} / {productLimit.toLocaleString()} ชิ้น
+                                    </div>
+                                  ) : (
+                                    <div className="text-gray-500">
+                                      ตามสต็อก: {productRemaining.toLocaleString()} ชิ้น
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-center text-xs">
@@ -814,6 +897,7 @@ export default function AdminPromotions({ user }) {
                   <option value="discount_fixed">ส่วนลดต่อชิ้น (บาท)</option>
                   <option value="target_unit_price">ราคาพิเศษต่อชิ้น (บาท)</option>
                   <option value="second_item_discount">ชิ้นที่ 2 ลด (บาท/%)</option>
+                  <option value="free_shipping_min_purchase">ซื้อครบยอด ส่งฟรี</option>
                 </select>
                 {PROMOTION_TYPE_HELP[promotionForm.Type] && (
                   <p className="mt-2 text-xs leading-snug text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
@@ -840,55 +924,58 @@ export default function AdminPromotions({ user }) {
               </div>
 
               {/* ProductID */}
-              <div className="product-dropdown-container">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  รหัสสินค้า (X) *
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="ค้นหารหัสหรือชื่อสินค้า..."
-                    value={productSearchTerm || (getSelectedProduct() ? `${getSelectedProduct().id} - ${getSelectedProduct().name}` : '')}
-                    onChange={(e) => {
-                      setProductSearchTerm(e.target.value)
-                      setShowProductDropdown(true)
-                      if (!e.target.value) {
-                        setPromotionForm({ ...promotionForm, ProductID: '' })
-                      }
-                    }}
-                    onFocus={() => {
-                      if (productSearchTerm || !getSelectedProduct()) {
+              {promotionForm.Type !== FREE_SHIPPING_PROMOTION_TYPE && (
+                <div className="product-dropdown-container">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    รหัสสินค้า (X) *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="ค้นหารหัสหรือชื่อสินค้า..."
+                      value={productSearchTerm || (getSelectedProduct() ? `${getSelectedProduct().id} - ${getSelectedProduct().name}` : '')}
+                      onChange={(e) => {
+                        setProductSearchTerm(e.target.value)
                         setShowProductDropdown(true)
-                      }
-                    }}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                  />
-                  {showProductDropdown && (productSearchTerm || !getSelectedProduct()) && filteredProducts.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                      {filteredProducts.slice(0, 10).map((product) => (
-                        <div
-                          key={product.id}
-                          onClick={() => {
-                            setPromotionForm({ ...promotionForm, ProductID: product.id })
-                            setProductSearchTerm('')
-                            setShowProductDropdown(false)
-                          }}
-                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer border-b border-gray-100 last:border-b-0"
-                        >
-                          <div className="font-medium text-gray-900">{product.id}</div>
-                          <div className="text-sm text-gray-600">{product.name}</div>
-                        </div>
-                      ))}
+                        if (!e.target.value) {
+                          setPromotionForm({ ...promotionForm, ProductID: '' })
+                        }
+                      }}
+                      onFocus={() => {
+                        if (productSearchTerm || !getSelectedProduct()) {
+                          setShowProductDropdown(true)
+                        }
+                      }}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    />
+                    {showProductDropdown && (productSearchTerm || !getSelectedProduct()) && filteredProducts.length > 0 && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        {filteredProducts.slice(0, 10).map((product) => (
+                          <div
+                            key={product.id}
+                            onClick={() => {
+                              setPromotionForm({ ...promotionForm, ProductID: product.id })
+                              setProductSearchTerm('')
+                              setShowProductDropdown(false)
+                            }}
+                            className="px-4 py-2 hover:bg-gray-100 cursor-pointer border-b border-gray-100 last:border-b-0"
+                          >
+                            <div className="font-medium text-gray-900">{product.id}</div>
+                            <div className="text-sm text-gray-600">{product.name}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {getSelectedProduct() && !productSearchTerm && (
+                    <div className="mt-2 text-sm text-gray-600">
+                      <span className="font-medium">สินค้า:</span> {getSelectedProduct().name}
                     </div>
                   )}
                 </div>
-                {getSelectedProduct() && !productSearchTerm && (
-                  <div className="mt-2 text-sm text-gray-600">
-                    <span className="font-medium">สินค้า:</span> {getSelectedProduct().name}
-                  </div>
-                )}
-              </div>
+              )}
 
+              {promotionForm.Type !== FREE_SHIPPING_PROMOTION_TYPE && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   จำนวนสินค้า X ที่จัดโปร (0 = ใช้ตามสต็อกจริง)
@@ -918,6 +1005,34 @@ export default function AdminPromotions({ user }) {
                   </p>
                 )}
               </div>
+              )}
+
+              {promotionForm.Type === FREE_SHIPPING_PROMOTION_TYPE && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Supplier ที่เข้าร่วมโปรส่งฟรี
+                  </label>
+                  <p className="text-xs text-gray-600 mb-3">
+                    หากตะกร้ามีหลาย Supplier โดยไม่มีส่วนกลาง ควรเลือก Supplier ให้ชัดเจน ระบบจะฟรีเฉพาะค่าจัดส่งของ Supplier ที่เลือกและยอดถึงเงื่อนไข
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                    {supplierOptions.map((supplierKey) => (
+                      <label key={supplierKey} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={(promotionForm.AllowedSupplierKeys || []).includes(supplierKey)}
+                          onChange={() => toggleAllowedSupplier(supplierKey)}
+                          className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span>{supplierKey}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {supplierOptions.length === 0 && (
+                    <p className="text-xs text-amber-700">ยังไม่พบรายชื่อ Supplier จากสินค้า/ตาราง suppliers</p>
+                  )}
+                </div>
+              )}
 
               {/* Buy X Get Y Fields */}
               {promotionForm.Type === 'buy_x_get_y' && (

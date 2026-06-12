@@ -51,6 +51,7 @@ export default function AdminOrders({ user }) {
 
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [hasLoadedOrders, setHasLoadedOrders] = useState(false)
   const [statusFilter, setStatusFilter] = useState('All')
   const [searchOrderId, setSearchOrderId] = useState('')
   const [startDate, setStartDate] = useState('')
@@ -172,6 +173,7 @@ export default function AdminOrders({ user }) {
       })
     } finally {
       setLoading(false)
+      setHasLoadedOrders(true)
     }
   }, [
     currentPage,
@@ -1633,7 +1635,7 @@ export default function AdminOrders({ user }) {
   const summaryAvgPerOrder =
     hasSearchTerm && summaryOrderCount > 0 ? summaryTotalValue / summaryOrderCount : null
 
-  if (loading) {
+  if (loading && !hasLoadedOrders) {
     return <LoadingSpinner />
   }
 
@@ -1662,11 +1664,17 @@ export default function AdminOrders({ user }) {
                   onClick={fetchOrders}
                   className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-bold transition"
                 >
-                  <Icon icon="fa-sync-alt" className="text-gray-700" />
-                  <span className="text-gray-700">รีเฟรช</span>
+                  <Icon icon="fa-sync-alt" className={`text-gray-700 ${loading ? 'animate-spin' : ''}`} />
+                  <span className="text-gray-700">{loading ? 'กำลังรีเฟรช...' : 'รีเฟรช'}</span>
                 </button>
               </div>
             </div>
+            {loading && hasLoadedOrders && (
+              <div className="mb-4 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-2 text-sm text-emerald-800 shadow-sm">
+                <Icon icon="fa-sync-alt" className="mr-2 animate-spin" />
+                กำลังอัปเดตข้อมูลตามตัวกรอง...
+              </div>
+            )}
 
             {/* Search and Date Range Filters - จัดเรียงให้สวยบนมือถือ */}
             <div className="space-y-4 mb-4">

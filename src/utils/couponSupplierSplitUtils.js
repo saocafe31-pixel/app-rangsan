@@ -151,6 +151,75 @@ export function eligibleSubtotalForCoupon(cart, { multiSupplier, hasCentralSuppl
   return cart.reduce((s, i) => s + sumLine(i), 0)
 }
 
+export function eligibleSubtotalForSupplierScope(cart, { multiSupplier, hasCentralSupplier, allowedKeys }) {
+  const sumLine = (item) => linePaidSubtotal(item)
+  if (!cart || cart.length === 0) return 0
+  if (!multiSupplier) {
+    const allowed =
+      allowedKeys && allowedKeys.length > 0
+        ? new Set(allowedKeys.map((k) => normalizeSupplierName(k)))
+        : null
+    if (!allowed) return cart.reduce((s, i) => s + sumLine(i), 0)
+    return cart.reduce((s, i) => {
+      const k = normalizeSupplierName(getItemSupplierKey(i))
+      return allowed.has(k) ? s + sumLine(i) : s
+    }, 0)
+  }
+
+  const allowed =
+    allowedKeys && allowedKeys.length > 0
+      ? new Set(allowedKeys.map((k) => normalizeSupplierName(k)))
+      : null
+
+  if (allowed && allowed.size > 0) {
+    return cart.reduce((s, i) => {
+      const k = normalizeSupplierName(getItemSupplierKey(i))
+      return allowed.has(k) ? s + sumLine(i) : s
+    }, 0)
+  }
+
+  if (hasCentralSupplier) {
+    return cart.reduce((s, i) => {
+      const k = normalizeSupplierName(getItemSupplierKey(i))
+      return k === CENTRAL_SUPPLIER_LABEL ? s + sumLine(i) : s
+    }, 0)
+  }
+
+  return 0
+}
+
+export function supplierKeysForSupplierScope(supplierKeys, { multiSupplier, hasCentralSupplier, allowedKeys }) {
+  const keys = (supplierKeys || []).map((k) => normalizeSupplierName(k)).filter(Boolean)
+  if (keys.length === 0) return []
+
+  const allowed =
+    allowedKeys && allowedKeys.length > 0
+      ? new Set(allowedKeys.map((k) => normalizeSupplierName(k)))
+      : null
+
+  if (!multiSupplier) {
+    return allowed ? keys.filter((k) => allowed.has(normalizeSupplierName(k))) : keys
+  }
+
+  if (allowed && allowed.size > 0) {
+    return keys.filter((k) => allowed.has(normalizeSupplierName(k)))
+  }
+
+  if (hasCentralSupplier) {
+    return keys.filter((k) => normalizeSupplierName(k) === CENTRAL_SUPPLIER_LABEL)
+  }
+
+  return []
+}
+
+export function unionFreeShippingSupplierKeysFromPromotions(promotions) {
+  const u = new Set()
+  ;(promotions || []).forEach((p) => {
+    ;(p.freeShippingSupplierKeys || []).forEach((k) => u.add(normalizeSupplierName(k)))
+  })
+  return [...u]
+}
+
 export function unionAllowedKeysFromPromotions(promotions) {
   const lists = (promotions || [])
     .map((p) => parseAllowedSupplierKeys(p.AllowedSupplierKeys))

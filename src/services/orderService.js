@@ -98,6 +98,71 @@ function normalizeOrderId(value) {
   return String(value).trim()
 }
 
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim())
+}
+
+async function fetchAllOrderRows() {
+  const rows = []
+  const pageSize = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('order')
+      .select('*')
+      .order('Timestamp', { ascending: false })
+      .range(from, from + pageSize - 1)
+
+    if (error) throw new Error(error.message)
+    rows.push(...(data || []))
+    if (!data || data.length < pageSize) break
+    from += pageSize
+  }
+
+  return rows
+}
+
+async function enrichOrdersWithUsernames(orders) {
+  if (!Array.isArray(orders) || orders.length === 0) return orders
+  const emails = [
+    ...new Set(
+      orders
+        .map((order) => String(order.UserEmail || order.useremail || order.User || '').trim())
+        .filter(Boolean)
+    )
+  ]
+  if (emails.length === 0) return orders
+
+  try {
+    const userMap = new Map()
+    const batchSize = 500
+    for (let i = 0; i < emails.length; i += batchSize) {
+      const batch = emails.slice(i, i + batchSize)
+      const { data, error } = await supabase.from('users').select('Email, Username').in('Email', batch)
+      if (error) throw error
+      ;(data || []).forEach((row) => {
+        const email = String(row.Email || '').trim().toLowerCase()
+        const username = String(row.Username || '').trim()
+        if (email && username) userMap.set(email, username)
+      })
+    }
+
+    orders.forEach((order) => {
+      const email = String(order.UserEmail || order.useremail || order.User || '').trim().toLowerCase()
+      const current = String(order.Username || order.username || '').trim()
+      const mapped = email ? userMap.get(email) : ''
+      if (mapped && (!current || looksLikeEmail(current))) {
+        order.Username = mapped
+      }
+    })
+  } catch (error) {
+    console.warn('[orderService] ไม่สามารถ enrich Username จาก users:', error.message || error)
+  }
+
+  return orders
+}
+
 /** จัดกลุ่มแถวตาราง order (หลายแถวต่อออเดอร์) เป็นออเดอร์เดียว — รูปแบบเดียวกับ getAllOrders (แอดมิน) */
 async function buildAdminOrdersFromRawRows(rawRows) {
   const ordersMap = new Map()
@@ -154,6 +219,7 @@ async function buildAdminOrdersFromRawRows(rawRows) {
   })
 
   await enrichOrderItemsWithProductId(ordersData)
+  await enrichOrdersWithUsernames(ordersData)
   return ordersData
 }
 
@@ -319,16 +385,8 @@ export const orderService = {
 
   // Get all orders (admin)
   async getAllOrders() {
-    const { data, error } = await supabase
-      .from('order')
-      .select('*')
-      .order('Timestamp', { ascending: false })
-
-    if (error) {
-      throw new Error(error.message)
-    }
-
-    return buildAdminOrdersFromRawRows(data || [])
+    const rows = await fetchAllOrderRows()
+    return buildAdminOrdersFromRawRows(rows)
   },
 
   /**
@@ -472,6 +530,7 @@ export const orderService = {
     // Also include free items info: "FreeItems: {itemName}:{freeQty},..."
     let discountInfo = null
     const freeItemsInfo = []
+    const freeShippingInfo = []
     
     // Collect free items information
     if (orderData.items && Array.isArray(orderData.items)) {
@@ -486,6 +545,21 @@ export const orderService = {
       orderData.promotions && Array.isArray(orderData.promotions)
         ? [...new Set(orderData.promotions.map((p) => p.id).filter(Boolean))]
         : []
+    if (orderData.promotions && Array.isArray(orderData.promotions)) {
+      orderData.promotions.forEach((promotion) => {
+        if (
+          promotion?.type === 'free_shipping_min_purchase' &&
+          Array.isArray(promotion.freeShippingSupplierKeys) &&
+          promotion.freeShippingSupplierKeys.length > 0
+        ) {
+          freeShippingInfo.push(...promotion.freeShippingSupplierKeys)
+        }
+      })
+    }
+    const freeShippingSuffix =
+      freeShippingInfo.length > 0
+        ? ` | FreeShipping: ${[...new Set(freeShippingInfo)].join(',')}`
+        : ''
     const promoIdsSuffix =
       promoIdList.length > 0 ? ` | PromoIds: ${promoIdList.join(',')}` : ''
 
@@ -494,21 +568,28 @@ export const orderService = {
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (freeShippingSuffix) discountInfo += freeShippingSuffix
       if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (orderData.promotionDiscount && orderData.promotionDiscount > 0) {
       discountInfo = `Promotion: -${orderData.promotionDiscount}B`
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (freeShippingSuffix) discountInfo += freeShippingSuffix
       if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (orderData.discountAmount && Number(orderData.discountAmount) > 0) {
       discountInfo = `ส่วนลดแบ่งส่วน: -${orderData.discountAmount}B`
       if (freeItemsInfo.length > 0) {
         discountInfo += ` | FreeItems: ${freeItemsInfo.join(',')}`
       }
+      if (freeShippingSuffix) discountInfo += freeShippingSuffix
       if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (freeItemsInfo.length > 0) {
       discountInfo = `FreeItems: ${freeItemsInfo.join(',')}`
+      if (freeShippingSuffix) discountInfo += freeShippingSuffix
+      if (promoIdsSuffix) discountInfo += promoIdsSuffix
+    } else if (freeShippingSuffix) {
+      discountInfo = freeShippingSuffix.replace(/^\s*\|\s*/, '')
       if (promoIdsSuffix) discountInfo += promoIdsSuffix
     } else if (promoIdsSuffix) {
       discountInfo = promoIdsSuffix.replace(/^\s*\|\s*/, '')

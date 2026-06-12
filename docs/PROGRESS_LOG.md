@@ -32,6 +32,48 @@
 
 <!-- progress-log-entries -->
 
+### 2026-06-12 — [fix/UX] Filter หน้าแอดมินไม่ขึ้น full-page loading ระหว่างค้นหา
+- **สรุป:** แยกโหลดครั้งแรกกับ refresh หลังเปลี่ยน filter ใน `AdminOrders`, `AdminDashboard`, `AdminReports`; ค้นหา/เปลี่ยนวันที่/เลือก Supplier ยัง realtime แต่แสดง inline “กำลังอัปเดตข้อมูล...” แทน loading screen ทั้งหน้า
+- **ไฟล์หลัก:** `src/pages/AdminOrders.jsx`, `src/pages/AdminDashboard.jsx`, `src/pages/AdminReports.jsx`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run build`, `npm run test:run -- src/utils/orderDetailReportExport.test.js` (6 tests), `ReadLints`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ครั้งแรกที่เข้าหน้ายังแสดง loading screen ได้ตามเดิม; หลังมีข้อมูลแล้ว filter จะไม่ทำให้หน้ากระพริบกลับไป loading screen
+
+### 2026-06-12 — [fix/feat] ปรับรายงานยอดขายและ Excel export ให้ reconcile ยอดออเดอร์
+- **สรุป:** ปรับ `getAllOrders()` ให้โหลด raw rows แบบ paginated ก่อน group; รายงานยอดขายและ Excel ใช้ summary เดียวกันจากสูตร `Qty*Price - ส่วนลด/โปร + ค่าจัดส่ง`; เพิ่ม Supplier filter หลายค่า; เพิ่มชีต `ยอดรวมตามออเดอร์` และ `สรุปงบกำไรขาดทุน` พร้อมผลต่างยอดบันทึกกับสูตร
+- **ไฟล์หลัก:** `src/pages/AdminReports.jsx`, `src/services/orderService.js`, `src/utils/orderDetailReportExport.js`, `src/utils/orderDetailReportExport.test.js`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test:run -- src/utils/orderDetailReportExport.test.js` (6 tests), `npm run build`, `ReadLints`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ไม่เปลี่ยน schema/ข้อมูลจริงในฐานข้อมูล; Excel ยังเป็น Excel XML `.xls` เพื่อไม่เพิ่ม dependency
+
+### 2026-06-11 — [fix] แก้ export รายงานละเอียด error users.email
+- **สรุป:** ปรับ query ตาราง `users` ในปุ่ม Excel รายงานออเดอร์ละเอียดให้เลือกเฉพาะคอลัมน์จริง `Email, Username` เพื่อแก้ error `column users.email does not exist`
+- **ไฟล์หลัก:** `src/pages/AdminReports.jsx`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test:run -- src/utils/orderDetailReportExport.test.js` (5 tests), `npm run build`, `ReadLints`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** utility ยังรองรับข้อมูล lowercase ถ้ามีการส่ง object เข้ามาจากแหล่งอื่น แต่ Supabase select ต้องไม่ระบุคอลัมน์ที่ไม่มีจริง
+
+### 2026-06-11 — [feat] Excel รายงานออเดอร์ละเอียดใน Admin Reports
+- **สรุป:** เพิ่มปุ่มส่งออก Excel รายงานออเดอร์ละเอียดในหน้า `AdminReports`; utility แยกสร้างชีตออเดอร์/ลูกค้า/สินค้า/สรุปรวม/รายวัน; ยอดระดับออเดอร์ dedupe ต่อ `OrderID` ก่อนรวม และ parser แยกส่วนลดโค้ด/โปรโมชั่นโดยไม่จับ `Batch ID`
+- **ไฟล์หลัก:** `src/pages/AdminReports.jsx`, `src/utils/orderDetailReportExport.js`, `src/utils/orderDetailReportExport.test.js`, `docs/PROJECT_PROGRESS_LOG.md`, `docs/README.md`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test:run -- src/utils/orderDetailReportExport.test.js` (5 tests), `npm run build`, `ReadLints`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ไฟล์ export เป็น Excel XML `.xls` เพื่อเปิดใน Excel ได้โดยไม่เพิ่ม dependency ใหม่
+
+### 2026-06-10 — [feat] โปรซื้อครบยอด ส่งฟรีตาม Supplier
+- **สรุป:** เพิ่ม promotion type `free_shipping_min_purchase` สำหรับซื้อครบยอดแล้วส่งฟรี; แอดมินเลือก Supplier ที่เข้าร่วมได้; Checkout คำนวณยอดขั้นต่ำเฉพาะ Supplier ที่เข้าเงื่อนไขและลดเฉพาะ `shippingShare` ของ Supplier นั้น ไม่รวมเป็นส่วนลดสินค้า
+- **ไฟล์หลัก:** `supabase/migrations/20260610233400_promotion_free_shipping_min_purchase.sql`, `src/utils/promotionUtils.js`, `src/utils/couponSupplierSplitUtils.js`, `src/utils/promotionUtils.test.js`, `src/pages/AdminPromotions.jsx`, `src/pages/Checkout.jsx`, `src/services/orderService.js`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run test -- --run src/utils/promotionUtils.test.js` (18 tests), `npm run build`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ต้องรัน migration `20260610233400_promotion_free_shipping_min_purchase.sql` บน Supabase ก่อนสร้างโปรประเภท “ซื้อครบยอด ส่งฟรี”
+
+### 2026-05-30 — [fix] ลายเซ็นใบกำกับภาษีไม่แสดง
+- **สรุป:** ตัด fallback URL ลายเซ็นเก่าที่ตอบ `403 Forbidden`; กรอง URL ลายเซ็น legacy จาก settings; ปรับหน้าพิมพ์ให้รอรูปในเอกสารโหลดก่อนเรียก `print()` เพื่อให้ลายเซ็น/โลโก้ติดใน PDF มากขึ้น
+- **ไฟล์หลัก:** `src/services/printService.js`, `src/services/shopSettingsService.js`, `src/utils/constants.js`, `docs/PROGRESS_LOG.md`
+- **ตรวจสอบ:** `npm run build`; ตรวจ default signature URL ได้ `403 Forbidden`
+- **ลบไฟล์ชั่วคราว:** -
+- **หมายเหตุ:** ถ้าต้องการให้ลายเซ็นขึ้น ต้องบันทึกลายเซ็นใหม่ใน Admin Settings หรือใส่ URL รูปที่เข้าถึงได้
+
 ### 2026-05-21 — [feat] โปรโมชั่นตามกลุ่มลูกค้าและโควต้าสินค้า
 - **สรุป:** เพิ่มการกำหนดโปรสำหรับ `all`/`regular`/`franchise`; เพิ่มโควต้าจำนวนสินค้า X ที่จัดโปรพร้อม partial apply เมื่อเหลือน้อยกว่าจำนวนในตะกร้า; Checkout นับจำนวนสินค้าโปรที่ใช้และ orderService ปิดโปรอัตโนมัติเมื่อครบโควต้าหรือสต็อกหมด
 - **ไฟล์หลัก:** `supabase/migrations/20260521095900_promotion_role_product_quota.sql`, `src/utils/promotionUtils.js`, `src/pages/AdminPromotions.jsx`, `src/pages/Checkout.jsx`, `src/services/orderService.js`, `src/utils/promotionUtils.test.js`, `docs/PROGRESS_LOG.md`

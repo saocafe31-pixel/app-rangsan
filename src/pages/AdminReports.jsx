@@ -12,6 +12,10 @@ import { taxInvoiceService } from '../services/taxInvoiceService'
 import { supabase } from '../utils/supabase'
 import { toYmd } from '../utils/datePresets'
 import { getOrderItemDisplayName, orderItemNameFirstLine } from '../utils/orderBundleLineUtils'
+import {
+  buildOrderDetailReportWorkbook,
+  downloadOrderDetailReportExcel
+} from '../utils/orderDetailReportExport'
 
 /** สถานะออเดอร์ที่ถือว่าจัดส่งสำเร็จ — ต้องตรงกับค่าในตาราง order */
 const ORDER_STATUS_SHIPPED = 'จัดส่งแล้ว'
@@ -82,12 +86,15 @@ function getNormalizedName(value) {
 
 export default function AdminReports({ user }) {
   const [loading, setLoading] = useState(false)
+  const [hasLoadedReport, setHasLoadedReport] = useState(false)
   const [reportType, setReportType] = useState('sales') // 'sales' | 'stock' | 'tax'
   const [dateRange, setDateRange] = useState(getDefaultDateRange)
   const [showAllDates, setShowAllDates] = useState(false)
   /** โหมดดึงจากตาราง order: ทุกสถานะในช่วง หรือเฉพาะจัดส่งแล้วในช่วง */
   const [salesOrderScope, setSalesOrderScope] = useState(SALES_ORDER_SCOPE_SHIPPED)
   const [topProductsRankBy, setTopProductsRankBy] = useState(TOP_PRODUCTS_RANK_REVENUE)
+  const [selectedSalesSuppliers, setSelectedSalesSuppliers] = useState([])
+  const [salesSupplierOptions, setSalesSupplierOptions] = useState([])
   const [skuSearch, setSkuSearch] = useState('')
   const [skuStockFilter, setSkuStockFilter] = useState('all') // all | low | out
   const [skuSort, setSkuSort] = useState({ key: 'soldQtyPeriod', direction: 'desc' })
@@ -158,70 +165,55 @@ export default function AdminReports({ user }) {
     } else if (reportType === 'stock') {
       fetchStockReport()
     }
-  }, [reportType, dateRange, showAllDates, salesOrderScope])
+  }, [reportType, dateRange, showAllDates, salesOrderScope, selectedSalesSuppliers])
 
   const fetchSalesReport = async () => {
     setLoading(true)
     try {
       const orders = await orderService.getAllOrders()
+      const allProducts = await productService.getProducts(user, 0, 10000, '')
 
       const filteredOrders = filterOrdersByDateRange(orders, dateRange, showAllDates)
       const reportOrders = applySalesOrderScope(filteredOrders, salesOrderScope)
       const shippedInPeriodOrders = filteredOrders.filter(
         (o) => (o.Status || o.status || '') === ORDER_STATUS_SHIPPED
       )
-
       const allTimeCompletedOrders = orders.filter(
         (o) => (o.Status || o.status || '') === ORDER_STATUS_SHIPPED
       )
 
-      const totalSales = reportOrders.reduce((sum, order) => {
-        return sum + Number(order.Total || order.total || 0)
-      }, 0)
-
-      const totalSalesAllTime = allTimeCompletedOrders.reduce((sum, order) => {
-        return sum + Number(order.Total || order.total || 0)
-      }, 0)
-
-      const totalShippingCost = reportOrders.reduce((sum, order) => {
-        return sum + Number(order['Shipping Cost'] || order.ShippingCost || order.Shipping || order.shipping || 0)
-      }, 0)
-
-      let totalCost = 0
-      try {
-        const allProducts = await productService.getProducts(user, 0, 10000, '')
-        const productCostMap = new Map()
-        allProducts.forEach((product) => {
-          if (product.name && product.cost) {
-            productCostMap.set(product.name, product.cost)
-          }
+      const buildWorkbook = (sourceOrders, selectedSupplierKeys = selectedSalesSuppliers) =>
+        buildOrderDetailReportWorkbook({
+          orders: sourceOrders,
+          products: allProducts,
+          selectedSupplierKeys
         })
 
-        reportOrders.forEach((order) => {
-          const items = order.Items || []
-          items.forEach((item) => {
-            const rawName = item.name || ''
-            const firstLine = orderItemNameFirstLine(rawName)
-            const qty = Number(item.qty || 0)
-            const cost =
-              productCostMap.get(rawName) || productCostMap.get(firstLine) || productCostMap.get(String(rawName).trim()) || 0
-            totalCost += cost * qty
-          })
-        })
-      } catch (error) {
-        console.error('Error calculating cost:', error)
-      }
+      const supplierOptionsWorkbook = buildWorkbook(reportOrders, [])
+      setSalesSupplierOptions(supplierOptionsWorkbook.availableSuppliers)
 
-      const profit = totalSales - totalCost - totalShippingCost
-      const profitMargin = totalSales > 0 ? (profit / totalSales) * 100 : 0
-      const averageOrderValue = reportOrders.length > 0 ? totalSales / reportOrders.length : 0
+      const reportWorkbook = buildWorkbook(reportOrders)
+      const shippedInPeriodWorkbook = buildWorkbook(shippedInPeriodOrders)
+      const allTimeCompletedWorkbook = buildWorkbook(allTimeCompletedOrders)
+      const allOrdersWorkbook = buildWorkbook(orders)
+      const totals = reportWorkbook.totals
+
+      const totalSales = totals.formulaTotal
+      const totalSalesAllTime = allTimeCompletedWorkbook.totals.formulaTotal
+      const totalShippingCost = totals.shipping
+      const totalCost = totals.productCostTotal
+      const profit = totals.profit
+      const profitMargin = totals.profitMargin
+      const averageOrderValue = totals.orderCount > 0 ? totalSales / totals.orderCount : 0
       const averageOrderValueAllTime =
-        allTimeCompletedOrders.length > 0 ? totalSalesAllTime / allTimeCompletedOrders.length : 0
+        allTimeCompletedWorkbook.totals.orderCount > 0
+          ? totalSalesAllTime / allTimeCompletedWorkbook.totals.orderCount
+          : 0
 
       const salesByPayment = { credit: 0, transfer: 0 }
-      reportOrders.forEach((order) => {
-        const paymentMethod = (order.PaymentMethod || order.paymentmethod || 'transfer').toLowerCase()
-        const total = Number(order.Total || order.total || 0)
+      reportWorkbook.orderRows.forEach((order) => {
+        const paymentMethod = (order.paymentMethod || 'transfer').toLowerCase()
+        const total = Number(order.formulaTotal || 0)
         if (paymentMethod === 'credit') {
           salesByPayment.credit += total
         } else {
@@ -233,7 +225,7 @@ export default function AdminReports({ user }) {
       const salesByStatus = { pending: 0, completed: 0, cancelled: 0 }
       filteredOrders.forEach((order) => {
         const status = (order.Status || order.status || '').toLowerCase()
-        const total = Number(order.Total || order.total || 0)
+        const total = buildWorkbook([order]).totals.formulaTotal
         if (status.includes('รอ') || status.includes('pending')) {
           salesByStatus.pending += total
         } else if (status.includes('จัดส่ง') || status.includes('completed')) {
@@ -243,63 +235,35 @@ export default function AdminReports({ user }) {
         }
       })
 
-      const productSales = new Map()
-      reportOrders.forEach((order) => {
-        const items = order.Items || []
-        items.forEach((item) => {
-          const rawName = item.name || ''
-          if (!String(rawName).trim()) return
-          const aggKey = getNormalizedName(orderItemNameFirstLine(rawName)) || getNormalizedName(rawName)
-          const displayName = getOrderItemDisplayName(rawName)
-          const current = productSales.get(aggKey) || { name: displayName, qty: 0, revenue: 0 }
-          current.name = displayName
-          current.qty += Number(item.qty || 0)
-          current.revenue += Number(item.price || 0) * Number(item.qty || 0)
-          productSales.set(aggKey, current)
-        })
-      })
-      const productSalesList = Array.from(productSales.values())
+      const productSalesList = reportWorkbook.productSummary.map((row) => ({
+        name: row.itemName,
+        qty: row.qty,
+        revenue: row.revenue
+      }))
 
-      const customerSales = new Map()
-      reportOrders.forEach((order) => {
-        const email = order.UserEmail || order.useremail || ''
-        const username = order.Username || order.username || ''
-        const customerName = username || email.split('@')[0]
-        if (email) {
-          const current = customerSales.get(email) || {
-            email,
-            name: customerName,
-            totalSpent: 0,
-            orderCount: 0
-          }
-          current.totalSpent += Number(order.Total || order.total || 0)
-          current.orderCount += 1
-          customerSales.set(email, current)
-        }
-      })
-      const topCustomers = Array.from(customerSales.values())
-        .sort((a, b) => b.totalSpent - a.totalSpent)
+      const topCustomers = reportWorkbook.customerSummary
+        .map((row) => ({
+          email: row.email,
+          name: row.username || row.email?.split('@')[0] || '-',
+          totalSpent: row.formulaTotal,
+          orderCount: row.orderCount
+        }))
         .slice(0, 20)
 
-      const dailySalesMap = new Map()
-      reportOrders.forEach((order) => {
-        const orderDate = new Date(order.Timestamp || order.CreatedAt || order.created_at)
-        const dateKey = orderDate.toISOString().split('T')[0]
-        const current = dailySalesMap.get(dateKey) || { date: dateKey, sales: 0, orders: 0 }
-        current.sales += Number(order.Total || order.total || 0)
-        current.orders += 1
-        dailySalesMap.set(dateKey, current)
-      })
-      const dailySales = Array.from(dailySalesMap.values()).sort((a, b) => new Date(a.date) - new Date(b.date))
+      const dailySales = reportWorkbook.dailySummary.map((row) => ({
+        date: row.date,
+        sales: row.formulaTotal,
+        orders: row.orderCount
+      }))
 
       setSalesReport({
         periodSales: totalSales,
-        periodOrders: reportOrders.length,
-        periodCompletedOrders: shippedInPeriodOrders.length,
+        periodOrders: totals.orderCount,
+        periodCompletedOrders: shippedInPeriodWorkbook.totals.orderCount,
         totalSales,
         allTimeSales: totalSalesAllTime,
-        totalOrders: orders.length,
-        totalCompletedOrders: allTimeCompletedOrders.length,
+        totalOrders: allOrdersWorkbook.totals.orderCount,
+        totalCompletedOrders: allTimeCompletedWorkbook.totals.orderCount,
         averageOrderValue,
         averageOrderValueAllTime,
         totalCost,
@@ -321,6 +285,7 @@ export default function AdminReports({ user }) {
       })
     } finally {
       setLoading(false)
+      setHasLoadedReport(true)
     }
   }
 
@@ -511,6 +476,7 @@ export default function AdminReports({ user }) {
       })
     } finally {
       setLoading(false)
+      setHasLoadedReport(true)
     }
   }
 
@@ -553,6 +519,7 @@ export default function AdminReports({ user }) {
       setTaxReport({ invoices: [], orderMap: {}, totalCount: 0, sumTotal: 0, sumVat: 0, sumSubtotal: 0 })
     } finally {
       setLoading(false)
+      setHasLoadedReport(true)
     }
   }
 
@@ -669,6 +636,60 @@ export default function AdminReports({ user }) {
     link.href = URL.createObjectURL(blob)
     link.download = `รายงานยอดขาย_${dateRange.start}_${dateRange.end}.csv`
     link.click()
+  }
+
+  const exportOrderDetailReport = async () => {
+    try {
+      Swal.fire({
+        title: 'กำลังเตรียมรายงานละเอียด...',
+        didOpen: () => Swal.showLoading(),
+        allowOutsideClick: false
+      })
+
+      const [orders, products, usersResult] = await Promise.all([
+        orderService.getAllOrders(),
+        productService.getProducts(user, 0, 10000, ''),
+        supabase.from('users').select('Email, Username')
+      ])
+
+      if (usersResult.error) throw usersResult.error
+
+      const filteredOrders = filterOrdersByDateRange(orders, dateRange, showAllDates)
+      const reportOrders = applySalesOrderScope(filteredOrders, salesOrderScope)
+      const workbook = buildOrderDetailReportWorkbook({
+        orders: reportOrders,
+        products,
+        users: usersResult.data || [],
+        selectedSupplierKeys: selectedSalesSuppliers
+      })
+
+      if (workbook.lineRows.length === 0) {
+        Swal.fire({
+          icon: 'info',
+          title: 'ไม่มีข้อมูล',
+          text: 'ไม่พบออเดอร์ในช่วงและขอบเขตที่เลือก'
+        })
+        return
+      }
+
+      downloadOrderDetailReportExcel({
+        sheets: workbook.sheets,
+        filename: `รายงานออเดอร์ละเอียด_${showAllDates ? 'all' : `${dateRange.start}_${dateRange.end}`}.xls`
+      })
+
+      Swal.fire({
+        icon: 'success',
+        title: 'ส่งออกรายงานแล้ว',
+        text: `ส่งออก ${workbook.orderRows.length.toLocaleString()} ออเดอร์ / ${workbook.lineRows.length.toLocaleString()} รายการสินค้า`
+      })
+    } catch (error) {
+      console.error('Error exporting order detail report:', error)
+      Swal.fire({
+        icon: 'error',
+        title: 'ส่งออกรายงานไม่สำเร็จ',
+        text: error.message || 'ไม่สามารถส่งออกรายงานออเดอร์ละเอียดได้'
+      })
+    }
   }
 
   const exportStockReport = () => {
@@ -809,7 +830,15 @@ export default function AdminReports({ user }) {
     })
   }
 
-  if (loading) {
+  const toggleSalesSupplier = (supplier) => {
+    setSelectedSalesSuppliers((prev) =>
+      prev.includes(supplier)
+        ? prev.filter((item) => item !== supplier)
+        : [...prev, supplier].sort((a, b) => a.localeCompare(b, 'th'))
+    )
+  }
+
+  if (loading && !hasLoadedReport) {
     return <LoadingSpinner />
   }
 
@@ -824,7 +853,15 @@ export default function AdminReports({ user }) {
           <div className="max-w-7xl mx-auto">
             {/* Header */}
             <div className="flex justify-between items-center mb-6">
-              <h1 className="text-2xl font-bold text-gray-900">รายงาน</h1>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">รายงาน</h1>
+                {loading && hasLoadedReport && (
+                  <p className="mt-1 text-sm text-emerald-700">
+                    <Icon icon="fa-sync-alt" className="mr-2 animate-spin" />
+                    กำลังอัปเดตข้อมูลตามตัวกรอง...
+                  </p>
+                )}
+              </div>
               <div className="flex flex-wrap gap-2 md:gap-4">
                 <button
                   onClick={() => setReportType('sales')}
@@ -904,6 +941,16 @@ export default function AdminReports({ user }) {
                         <Icon icon="fa-download" />
                         <span>ส่งออก CSV</span>
                       </button>
+                      {reportType === 'sales' && (
+                        <button
+                          type="button"
+                          onClick={exportOrderDetailReport}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center gap-2"
+                        >
+                          <Icon icon="fa-file-excel" />
+                          <span>รายงานออเดอร์ละเอียด Excel</span>
+                        </button>
+                      )}
                       {reportType === 'stock' && (
                         <button
                           type="button"
@@ -969,6 +1016,47 @@ export default function AdminReports({ user }) {
                   </div>
                 </div>
                 )}
+                {reportType === 'sales' && salesSupplierOptions.length > 0 && (
+                  <div className="border-t border-gray-200 pt-4 mt-2 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">กรองยอดขายตาม Supplier</p>
+                        <p className="text-xs text-gray-500">
+                          มีผลต่อการ์ดยอดรวม, สินค้าขายดี, ลูกค้า, สรุปรายวัน และ Excel export
+                        </p>
+                      </div>
+                      {selectedSalesSuppliers.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSalesSuppliers([])}
+                          className="text-sm text-emerald-700 hover:text-emerald-900 font-medium"
+                        >
+                          ล้างตัวกรอง Supplier
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {salesSupplierOptions.map((supplier) => {
+                        const checked = selectedSalesSuppliers.includes(supplier)
+                        return (
+                          <button
+                            key={supplier}
+                            type="button"
+                            onClick={() => toggleSalesSupplier(supplier)}
+                            className={`px-3 py-1.5 rounded-full border text-sm transition ${
+                              checked
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                            }`}
+                          >
+                            {checked ? '✓ ' : ''}
+                            {supplier}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -982,6 +1070,10 @@ export default function AdminReports({ user }) {
                   {salesOrderScope === SALES_ORDER_SCOPE_SHIPPED
                     ? `เฉพาะออเดอร์ "${ORDER_STATUS_SHIPPED}"`
                     : 'ออเดอร์ทุกสถานะในช่วง (ไม่รวมยกเลิก)'}
+                  {' · '}
+                  {selectedSalesSuppliers.length > 0
+                    ? `Supplier: ${selectedSalesSuppliers.join(', ')}`
+                    : 'Supplier: ทั้งหมด'}
                 </div>
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

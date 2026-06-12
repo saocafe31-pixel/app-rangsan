@@ -5,6 +5,14 @@ const CACHE_MS = 2 * 60 * 1000 // 2 นาที
 let cached = null
 let cachedAt = 0
 
+function normalizeSignatureUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  // Glide-hosted legacy URLs currently return 403 and hide the signature image in print.
+  if (raw.includes('glide-prod.appspot.com')) return ''
+  return raw
+}
+
 /**
  * ดึงข้อมูลร้านจาก settings key 'shop' แล้ว merge กับค่าเริ่มต้นจาก constants
  * ใช้ในใบเสร็จ ใบกำกับ ใบปะหน้าพัสดุ
@@ -36,7 +44,7 @@ export async function getShopInfo() {
       address: raw.address ?? SHOP_INFO.address,
       phone: raw.phone ?? SHOP_INFO.phone,
       taxId: raw.taxId ?? SHOP_INFO.taxId,
-      signature: raw.signature ?? SHOP_INFO.signature,
+      signature: normalizeSignatureUrl(raw.signature ?? SHOP_INFO.signature),
       email: raw.email ?? '',
       line: raw.line ?? '',
       packingBoxWeightKg: Number.isFinite(packingBoxW) && packingBoxW >= 0 ? packingBoxW : 0,
@@ -51,7 +59,7 @@ export async function getShopInfo() {
       address: SHOP_INFO.address,
       phone: SHOP_INFO.phone,
       taxId: SHOP_INFO.taxId,
-      signature: SHOP_INFO.signature,
+      signature: normalizeSignatureUrl(SHOP_INFO.signature),
       email: '',
       line: '',
       packingBoxWeightKg: 0,

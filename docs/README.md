@@ -10,6 +10,7 @@
 |--------|----------|
 | **[PROJECT_WORKFLOW_REPORT.md](./PROJECT_WORKFLOW_REPORT.md)** | คู่มือ workflow, scope (feat/fix/docs/chore), progress log, การตรวจลิงก์เอกสาร, แม่แบบผลกระทบ/rollback |
 | **[PROGRESS_LOG.md](./PROGRESS_LOG.md)** | บันทึกรอบงาน — บังคับเมื่อมีการเปลี่ยนแปลงไฟล์ใน repo |
+| **[PROJECT_PROGRESS_LOG.md](./PROJECT_PROGRESS_LOG.md)** | บันทึกรายงานความคืบหน้าตามคำขอเฉพาะงาน พร้อม summary, impact, verification, rollback, next step |
 | **[AGENTS.md](../AGENTS.md)** | จุดเข้าสำหรับ Agent — ลิงก์ไป workflow, DEVELOPER_GUIDE, กฎ `.cursor/rules` |
 | **[.cursor/rules/project-workflow.mdc](../.cursor/rules/project-workflow.mdc)** | กฎบังคับการทำงานของ Agent ใน Cursor |
 

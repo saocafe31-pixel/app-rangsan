@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computePromotionMoneyDiscount,
   computeSecondItemPromotionDiscount,
+  isFreeShippingPromotionEligible,
   getPromotionAppliedProductQty,
   getPromotionEligiblePaidQty,
   getPromotionProductRemainingQty,
@@ -14,6 +15,10 @@ import {
   parsePromotionIdsFromDiscountInfo,
   promotionDateInputToIsoRange
 } from './promotionUtils'
+import {
+  eligibleSubtotalForSupplierScope,
+  supplierKeysForSupplierScope
+} from './couponSupplierSplitUtils'
 
 describe('promotionUtils', () => {
   it('counts paid qty excluding free from same promo', () => {
@@ -109,5 +114,35 @@ describe('promotionUtils', () => {
     const eligiblePaidQty = getPromotionEligiblePaidQty(promo, item, { stockQty: 100 })
     expect(eligiblePaidQty).toBe(7)
     expect(getPromotionAppliedProductQty(promo, item, { eligiblePaidQty })).toBe(5)
+  })
+
+  it('calculates free shipping eligible subtotal only for selected suppliers', () => {
+    const cart = [
+      { id: 'A1', supplier: 'Supplier A', price: 100, qty: 3 },
+      { id: 'B1', supplier: 'Supplier B', price: 200, qty: 2 }
+    ]
+    expect(
+      eligibleSubtotalForSupplierScope(cart, {
+        multiSupplier: true,
+        hasCentralSupplier: false,
+        allowedKeys: ['Supplier A']
+      })
+    ).toBe(300)
+  })
+
+  it('qualifies free shipping promotion when selected supplier subtotal reaches minimum', () => {
+    const promo = { Type: 'free_shipping_min_purchase', MinPurchase: 300 }
+    expect(isFreeShippingPromotionEligible(promo, 300)).toBe(true)
+    expect(isFreeShippingPromotionEligible(promo, 299)).toBe(false)
+  })
+
+  it('requires explicit suppliers for free shipping in multi-supplier cart without central supplier', () => {
+    expect(
+      supplierKeysForSupplierScope(['Supplier A', 'Supplier B'], {
+        multiSupplier: true,
+        hasCentralSupplier: false,
+        allowedKeys: null
+      })
+    ).toEqual([])
   })
 })

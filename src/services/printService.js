@@ -30,12 +30,52 @@ const lineNameHtmlByPolicy = (rawName, policy) => {
 // Helper function to open print window
 const openPrintWindow = (content) => {
   const printWindow = window.open('', '_blank')
+  if (!printWindow) return
   printWindow.document.write(content)
   printWindow.document.close()
-  printWindow.focus()
-  setTimeout(() => {
+
+  const waitForImages = () =>
+    new Promise((resolve) => {
+      const images = Array.from(printWindow.document.images || []).filter((img) => img.src)
+      if (images.length === 0) {
+        resolve()
+        return
+      }
+
+      let pending = images.length
+      let settled = false
+      const done = () => {
+        if (settled) return
+        pending -= 1
+        if (pending <= 0) {
+          settled = true
+          resolve()
+        }
+      }
+
+      const timeout = setTimeout(() => {
+        settled = true
+        resolve()
+      }, 2500)
+
+      images.forEach((img) => {
+        if (img.complete) {
+          done()
+          return
+        }
+        img.addEventListener('load', done, { once: true })
+        img.addEventListener('error', done, { once: true })
+      })
+
+      Promise.resolve().then(() => {
+        if (settled) clearTimeout(timeout)
+      })
+    })
+
+  waitForImages().then(() => {
+    printWindow.focus()
     printWindow.print()
-  }, 250)
+  })
 }
 
 // Helper function to format date
@@ -745,6 +785,9 @@ export const printService = {
     `
       })
       .join('')
+    const signatureHtml = shop.signature
+      ? `<img src="${escapeHtml(shop.signature)}" style="max-width:100%; max-height:130%; object-fit:contain; opacity:1.0; background:transparent; padding:0 8px;" onerror="this.style.display='none';" />`
+      : ''
 
     // Use Timestamp (order date) instead of invoiceDate or current date
     const orderDateStr = formatOrderDate(order.Timestamp || order.CreatedAt || taxData.invoiceDate || order.date)
@@ -842,7 +885,7 @@ export const printService = {
       <div style="margin-top:40px; display:flex; justify-content:flex-end; text-align:center; font-size:8pt;" class="signature-container">
         <div style="width:250px; position:relative; min-height:100px;">
           <div style="position:absolute; top:25px; left:50%; transform:translateX(-50%); width:150px; height:70px; display:flex; align-items:center; justify-content:center; z-index:2;">
-            <img src="${shop.signature}" style="max-width:100%; max-height:130%; object-fit:contain; opacity:1.0; background:transparent; padding:0 8px;" onerror="this.style.display='none';" />
+            ${signatureHtml}
           </div>
           <div style="border-bottom:1px solid #ccc; height:25px; margin-bottom:4px; margin-top:60px; position:relative; z-index:1;"></div>
           <div style="position:relative; margin-top:4px; z-index:1; font-size:7pt;">

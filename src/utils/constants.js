@@ -18,7 +18,7 @@ export const SHOP_INFO = {
   address: "เลขที่ 966 ถนนประชาราษฎร์ 1 แขวงบางซื่อ เขตบางซื่อ กรุงเทพมหานคร 10800",
   phone: "094-038-0836",
   taxId: "0 1055 67121 92 9",
-  signature: "https://storage.googleapis.com/glide-prod.appspot.com/uploads-v2/ZPQ1QSrzcL0RxpekC12M/pub/kbZT6vI8ZsnJaJWsYzmP.png"
+  signature: ""
 }
 
 export const SHOP_ADDRESS_TEXT = `บริษัท ไชยจันลา จำกัด (สำนักงานใหญ่) 

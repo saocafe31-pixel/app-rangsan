@@ -15,6 +15,8 @@ function toNonNegativeInt(value) {
   return n > 0 ? n : 0
 }
 
+export const FREE_SHIPPING_PROMOTION_TYPE = 'free_shipping_min_purchase'
+
 export function getCustomerPromotionType(user) {
   const raw = String(user?.userType || user?.customerType || 'regular').trim().toLowerCase()
   return raw === 'franchise' ? 'franchise' : 'regular'
@@ -51,6 +53,19 @@ export function getPromotionEligiblePaidQty(promotion, cartItem, { stockQty = nu
 
 export function isPromotionWithinProductQuota(promotion, { stockQty = null } = {}) {
   return getPromotionProductRemainingQty(promotion, { stockQty }) > 0
+}
+
+export function isFreeShippingPromotion(promotion) {
+  return promotion?.Type === FREE_SHIPPING_PROMOTION_TYPE
+}
+
+export function getFreeShippingMinPurchase(promotion) {
+  return Math.max(0, Number(promotion?.MinPurchase) || 0)
+}
+
+export function isFreeShippingPromotionEligible(promotion, eligibleSubtotal) {
+  if (!isFreeShippingPromotion(promotion)) return false
+  return Math.max(0, Number(eligibleSubtotal) || 0) >= getFreeShippingMinPurchase(promotion)
 }
 
 /** แปลงค่า date input (YYYY-MM-DD) เป็นช่วงเวลาใช้โปร */
@@ -101,6 +116,8 @@ export function formatPromotionCondition(promotion) {
     } else {
       lines.push(`ชิ้นที่ 2,4,6… ลด ฿${Number(promotion.DiscountAmount || 0).toLocaleString()}/ชิ้น`)
     }
+  } else if (type === FREE_SHIPPING_PROMOTION_TYPE) {
+    lines.push('ซื้อครบยอดที่กำหนด รับฟรีค่าจัดส่ง')
   }
   if (Number(promotion.MinPurchase) > 0) {
     lines.push(`ยอดตะกร้าขั้นต่ำ ฿${Number(promotion.MinPurchase).toLocaleString()}`)
@@ -241,7 +258,8 @@ export const PROMOTION_TYPE_LABELS = {
   discount_percentage: 'ส่วนลดเปอร์เซ็นต์',
   discount_fixed: 'ส่วนลดต่อชิ้น',
   target_unit_price: 'ราคาพิเศษต่อชิ้น',
-  second_item_discount: 'ชิ้นที่ 2 ลด (บาท/%)'
+  second_item_discount: 'ชิ้นที่ 2 ลด (บาท/%)',
+  free_shipping_min_purchase: 'ซื้อครบยอด ส่งฟรี'
 }
 
 export const PROMOTION_TARGET_CUSTOMER_TYPE_LABELS = {
