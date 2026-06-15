@@ -21,6 +21,7 @@ import { calculateFallbackShipping, pickShippingRateCost } from '../utils/shippi
 import { escapeHtml } from '../utils/helpers'
 import { freeQtyForLineItem, orderItemNameFirstLine, formatOrderItemLinesForDisplay, getOrderItemDisplayName } from '../utils/orderBundleLineUtils'
 import { partsFromOrder, mergeAddressParts, formatAddressMultiline, shippingPartsFromUserRow } from '../utils/orderAddressUtils'
+import { APP_LOGO_URL, SHOP_INFO } from '../utils/constants'
 
 const ADMIN_ORDERS_PAGE_SIZE = 20
 
@@ -32,6 +33,15 @@ function parseDiscountInfoSupplierMeta(discountInfo) {
     supplier: sup ? sup[1].trim() : null,
     batch: batch ? batch[1].trim() : null
   }
+}
+
+function parseAdminNoteFromDiscountInfo(discountInfo) {
+  const parts = String(discountInfo || '')
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const notePart = parts.find((part) => /^หมายเหตุแอดมิน\s*:/i.test(part))
+  return notePart ? notePart.replace(/^หมายเหตุแอดมิน\s*:\s*/i, '').trim() : ''
 }
 
 export default function AdminOrders({ user }) {
@@ -1085,6 +1095,336 @@ export default function AdminOrders({ user }) {
     `
   }
 
+  const buildOrderDetailsHtml = (order) => {
+    const paymentText = paymentMethodText(order.PaymentMethod)
+    const shippingMethodText = order.ShippingMethod === 'pickup'
+      ? '<span style="color: #ea580c;"><i class="fas fa-store"></i> รับเอง</span>'
+      : '<span style="color: #9333ea;"><i class="fas fa-truck"></i> จัดส่ง</span>'
+    const discountInfo = String(order.DiscountInfo || order.discountInfo || '')
+    const adminNote = parseAdminNoteFromDiscountInfo(discountInfo)
+    const freeItemsMatch = discountInfo.match(/FreeItems:\s*([^|]+)/i)
+    const freeItemsMap = new Map()
+    if (freeItemsMatch) {
+      freeItemsMatch[1]
+        .trim()
+        .split(',')
+        .forEach((itemStr) => {
+          const match = itemStr.trim().match(/^(.+?):(\d+)$/)
+          if (match) freeItemsMap.set(match[1].trim(), parseInt(match[2], 10))
+        })
+    }
+
+    let subtotal = 0
+    const lines =
+      order.Items?.map((item, idx) => {
+        const storedName = String(item.name || '')
+        const displayLines = formatOrderItemLinesForDisplay(storedName, { hideBundleIds: true })
+        const title = escapeHtml(displayLines[0] || '-')
+        const detailLines = displayLines
+          .slice(1)
+          .map((line) => `<div class="text-xs text-gray-600 mt-0.5">${escapeHtml(line)}</div>`)
+          .join('')
+        const productId = item.id || ''
+        const freeQty = freeQtyForLineItem(freeItemsMap, storedName)
+        const paidQty = Math.max(0, (item.qty || 0) - freeQty)
+        const unitPrice = Number(item.price || 0)
+        const totalPrice = unitPrice * paidQty
+        subtotal += totalPrice
+        const qtyText =
+          freeQty > 0
+            ? `${item.qty || 0} (ชำระ ${paidQty}, แถม ${freeQty})`
+            : `${item.qty || 0}`
+        return `
+          <div class="rounded-lg border border-gray-200 bg-gray-50/60 p-2.5 mb-2 last:mb-0">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="text-xs text-gray-500 mb-1">รายการที่ ${idx + 1}</div>
+                <div class="font-semibold text-gray-900 leading-tight">
+                  ${productId ? `<span class="text-gray-500 text-xs font-mono mr-1">${escapeHtml(String(productId))}</span>` : ''}${title}
+                </div>
+                ${detailLines}
+                <div class="text-xs text-gray-700 mt-1.5">
+                  จำนวน: <b>${qtyText}</b> • ราคา/หน่วย: ฿${unitPrice.toLocaleString()}
+                </div>
+              </div>
+              <div class="text-right shrink-0">
+                <div class="text-xs text-gray-500">รวมสุทธิ</div>
+                <div class="font-bold text-emerald-700">฿${totalPrice.toLocaleString()}</div>
+              </div>
+            </div>
+          </div>
+        `
+      }).join('') || '<p>ไม่มีรายการ</p>'
+    const ship = Number(order['Shipping Cost'] || order.ShippingCost || order.Shipping || order.shipping || 0)
+    const couponDisc = Number(order.Discount || order.discount || 0)
+    const promoDisc = Number(order.PromotionDiscount || order.promotionDiscount || order.Promotion || 0)
+    const grand = Number(order.Total || order.total || 0) || subtotal - couponDisc - promoDisc + ship
+    const installmentDetailsHtml = buildInstallmentDetailsHtml(order)
+    const adminNoteHtml = adminNote
+      ? `
+        <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+          <p class="font-bold text-amber-900 mb-1">หมายเหตุ</p>
+          <p class="text-amber-950 whitespace-pre-wrap">${escapeHtml(adminNote)}</p>
+        </div>
+      `
+      : ''
+
+    return `
+      <div class="text-left space-y-3 text-gray-800">
+        <div class="grid grid-cols-2 gap-4 mb-3">
+          <div>
+            <span class="text-gray-600 text-sm">วิธีการชำระเงิน</span>
+            <div class="font-bold mt-1">${paymentText}</div>
+          </div>
+          <div>
+            <span class="text-gray-600 text-sm">วิธีการรับสินค้า</span>
+            <div class="font-bold mt-1">${shippingMethodText}</div>
+          </div>
+        </div>
+        ${adminNoteHtml}
+        ${installmentDetailsHtml}
+        <div class="border-t pt-2">
+          <p class="font-bold mb-2">รายการสินค้า</p>
+          ${lines}
+        </div>
+        <div class="border-t pt-3 space-y-1 text-sm bg-gray-50 rounded p-3">
+          <div class="flex justify-between"><span>ยอดสินค้า (หลังหักแถมตามบรรทัด)</span><span class="font-semibold">฿${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
+          ${couponDisc > 0 ? `<div class="flex justify-between text-red-600"><span>ส่วนลด (คูปอง/โค้ด)</span><span>-฿${couponDisc.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` : ''}
+          ${promoDisc > 0 ? `<div class="flex justify-between text-red-600"><span>ส่วนลดโปรโมชั่น</span><span>-฿${promoDisc.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` : ''}
+          <div class="flex justify-between"><span>ค่าจัดส่ง</span><span>฿${ship.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
+          <div class="flex justify-between text-base font-bold border-t border-gray-200 pt-2 mt-1"><span>ยอดรวมทั้งสิ้น</span><span>฿${grand.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
+        </div>
+      </div>
+    `
+  }
+
+  const handlePrintOrderDetails = (order) => {
+    const orderId = order.ID || order.OrderID || ''
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) {
+      Swal.fire({ icon: 'warning', title: 'ไม่สามารถเปิดหน้าพิมพ์ได้', text: 'กรุณาอนุญาต popup สำหรับเว็บไซต์นี้' })
+      return
+    }
+    const discountInfo = String(order.DiscountInfo || order.discountInfo || '')
+    const adminNote = parseAdminNoteFromDiscountInfo(discountInfo)
+    const freeItemsMatch = discountInfo.match(/FreeItems:\s*([^|]+)/i)
+    const freeItemsMap = new Map()
+    if (freeItemsMatch) {
+      freeItemsMatch[1]
+        .trim()
+        .split(',')
+        .forEach((itemStr) => {
+          const match = itemStr.trim().match(/^(.+?):(\d+)$/)
+          if (match) freeItemsMap.set(match[1].trim(), parseInt(match[2], 10))
+        })
+    }
+
+    let subtotal = 0
+    const itemRows = (order.Items || []).map((item, idx) => {
+      const storedName = String(item.name || '')
+      const displayLines = formatOrderItemLinesForDisplay(storedName, { hideBundleIds: true })
+      const title = escapeHtml(displayLines[0] || '-')
+      const details = displayLines
+        .slice(1)
+        .map((line) => `<div class="item-detail">${escapeHtml(line)}</div>`)
+        .join('')
+      const productId = String(item.id || '').trim()
+      const freeQty = freeQtyForLineItem(freeItemsMap, storedName)
+      const paidQty = Math.max(0, (Number(item.qty) || 0) - freeQty)
+      const totalQty = Number(item.qty || 0)
+      const unitPrice = Number(item.price || 0)
+      const lineTotal = unitPrice * paidQty
+      subtotal += lineTotal
+      const qtyText = freeQty > 0 ? `${totalQty} (ชำระ ${paidQty}, แถม ${freeQty})` : totalQty
+      return `
+        <tr>
+          <td class="center">${idx + 1}</td>
+          <td class="code">${escapeHtml(productId || '-')}</td>
+          <td>
+            <div class="item-name">${title}</div>
+            ${details}
+          </td>
+          <td class="center">${qtyText}</td>
+          <td class="right">${unitPrice.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+          <td class="right strong">${lineTotal.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `
+    }).join('') || '<tr><td colspan="6" class="center muted">ไม่มีรายการสินค้า</td></tr>'
+    const ship = Number(order['Shipping Cost'] || order.ShippingCost || order.Shipping || order.shipping || 0)
+    const couponDisc = Number(order.Discount || order.discount || 0)
+    const promoDisc = Number(order.PromotionDiscount || order.promotionDiscount || order.Promotion || 0)
+    const discountTotal = couponDisc + promoDisc
+    const grand = Number(order.Total || order.total || 0) || subtotal - discountTotal + ship
+    const paymentLabel = order.PaymentMethod === 'credit' ? 'เครดิต' : 'โอนเงิน'
+    const shippingLabel = order.ShippingMethod === 'pickup' ? 'รับเอง' : 'จัดส่ง'
+    const customerName = order.Username || order.UserEmail || order.User || '-'
+    const customerEmail = order.UserEmail || order.User || ''
+    const orderDate = formatDate(order.Timestamp || order.CreatedAt)
+    const noteHtml = adminNote
+      ? `
+        <section class="note-box">
+          <div class="note-title">หมายเหตุ</div>
+          <div class="note-body">${escapeHtml(adminNote)}</div>
+        </section>
+      `
+      : ''
+    const content = `<!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <title>รายละเอียดออเดอร์ ${escapeHtml(orderId)}</title>
+          <style>
+            @page { size: A4; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body {
+              font-family: "Sarabun", Arial, sans-serif;
+              color: #111827;
+              line-height: 1.45;
+              font-size: 12px;
+              margin: 0;
+              background: #fff;
+            }
+            .page { max-width: 190mm; margin: 0 auto; }
+            .topbar { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+            .app-logo { width: 52px; height: 52px; object-fit: contain; border-radius: 50%; }
+            .title-wrap { flex: 1; }
+            h1 { color: #047857; font-size: 23px; line-height: 1.1; margin: 2px 0 6px; }
+            .shop-name { color: #111827; font-size: 11px; margin-bottom: 10px; }
+            .meta-row { font-size: 12px; margin: 2px 0; }
+            .meta-row strong { font-weight: 800; }
+            .payment-box {
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 18px;
+              padding: 12px 14px;
+              margin: 14px 0;
+            }
+            .label { color: #374151; font-weight: 700; margin-bottom: 4px; }
+            .value { font-size: 16px; font-weight: 900; }
+            .value.blue { color: #2563eb; }
+            .value.orange { color: #ea580c; }
+            .note-box {
+              border: 1px solid #fde68a;
+              border-radius: 8px;
+              background: #fffbeb;
+              padding: 10px 12px;
+              margin: 12px 0;
+              page-break-inside: avoid;
+            }
+            .note-title { font-weight: 900; color: #92400e; margin-bottom: 4px; }
+            .note-body { color: #451a03; white-space: pre-wrap; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th {
+              border: 2px solid #047857;
+              color: #047857;
+              background: #f8fafc;
+              font-size: 11px;
+              padding: 9px 8px;
+              text-align: center;
+              font-weight: 900;
+            }
+            td {
+              border: 1px solid #d1d5db;
+              padding: 10px 8px;
+              vertical-align: top;
+              font-size: 12px;
+            }
+            .center { text-align: center; }
+            .right { text-align: right; }
+            .strong { font-weight: 900; }
+            .muted { color: #6b7280; }
+            .code { font-family: Arial, monospace; font-weight: 700; font-size: 11px; }
+            .item-name { font-weight: 900; font-size: 13px; line-height: 1.35; }
+            .item-detail { color: #4b5563; font-size: 11px; margin-top: 2px; }
+            .summary-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
+            .summary-box {
+              width: 42%;
+              min-width: 260px;
+              border: 1px solid #a7f3d0;
+              border-radius: 8px;
+              padding: 12px;
+              page-break-inside: avoid;
+            }
+            .summary-line { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+            .summary-line.discount { color: #dc2626; }
+            .summary-total {
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              border-top: 1px solid #6ee7b7;
+              padding-top: 10px;
+              margin-top: 9px;
+              color: #047857;
+              font-size: 16px;
+              font-weight: 900;
+            }
+            @media print {
+              body { margin: 0; }
+              .page { max-width: none; }
+              .payment-box, .note-box, .summary-box { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <header class="topbar">
+              ${APP_LOGO_URL ? `<img src="${escapeHtml(APP_LOGO_URL)}" class="app-logo" onerror="this.style.display='none';" />` : ''}
+              <div class="title-wrap">
+                <h1>รายละเอียดออเดอร์</h1>
+                <div class="shop-name">${escapeHtml(SHOP_INFO.name || 'บริษัท ไชยจันลา จำกัด (สำนักงานใหญ่)')}</div>
+                <div class="meta-row"><strong>เลขที่:</strong> ${escapeHtml(orderId)} &nbsp;|&nbsp; <strong>วันที่:</strong> ${escapeHtml(orderDate)}</div>
+                <div class="meta-row"><strong>ลูกค้า:</strong> ${escapeHtml(customerName)}${customerEmail && customerEmail !== customerName ? ` (${escapeHtml(customerEmail)})` : ''}</div>
+              </div>
+            </header>
+
+            <section class="payment-box">
+              <div>
+                <div class="label">วิธีการชำระเงิน</div>
+                <div class="value blue">${escapeHtml(paymentLabel)}</div>
+              </div>
+              <div>
+                <div class="label">วิธีการรับสินค้า</div>
+                <div class="value orange">${escapeHtml(shippingLabel)}</div>
+              </div>
+            </section>
+
+            ${noteHtml}
+
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:5%;">#</th>
+                  <th style="width:12%;">รหัส</th>
+                  <th>รายการ</th>
+                  <th style="width:15%;">จำนวน</th>
+                  <th style="width:15%;">ราคา/หน่วย</th>
+                  <th style="width:15%;">รวมสุทธิ</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemRows}
+              </tbody>
+            </table>
+
+            <section class="summary-wrap">
+              <div class="summary-box">
+                <div class="summary-line"><span>ยอดรวมสินค้า</span><strong>${formatMoney(subtotal)}</strong></div>
+                <div class="summary-line discount"><span>ส่วนลด</span><strong>-${formatMoney(discountTotal)}</strong></div>
+                <div class="summary-line"><span>ค่าจัดส่ง</span><strong>${formatMoney(ship)}</strong></div>
+                <div class="summary-total"><span>ยอดสุทธิ</span><span>${formatMoney(grand)}</span></div>
+              </div>
+            </section>
+          </div>
+        </body>
+      </html>`
+    printWindow.document.write(content)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => printWindow.print(), 250)
+  }
+
   const getStatusColor = (status) => {
     switch (status) {
       case 'รอตรวจสอบ':
@@ -2027,112 +2367,18 @@ export default function AdminOrders({ user }) {
                           <td className="px-4 py-3">
                             <button
                               onClick={() => {
-                                const paymentMethodText = order.PaymentMethod === 'credit' 
-                                  ? '<span style="color: #16a34a;"><i class="fas fa-wallet"></i> เครดิต</span>'
-                                  : '<span style="color: #2563eb;"><i class="fas fa-university"></i> โอนเงิน</span>'
-                                const shippingMethodText = order.ShippingMethod === 'pickup'
-                                  ? '<span style="color: #ea580c;"><i class="fas fa-store"></i> รับเอง</span>'
-                                  : '<span style="color: #9333ea;"><i class="fas fa-truck"></i> จัดส่ง</span>'
-                                
+                                const detailsHtml = buildOrderDetailsHtml(order)
                                 Swal.fire({
                                   title: 'รายละเอียดออเดอร์',
-                                  html: (() => {
-                                    const discountInfo = String(order.DiscountInfo || order.discountInfo || '')
-                                    const freeItemsMatch = discountInfo.match(/FreeItems:\s*([^|]+)/i)
-                                    const freeItemsMap = new Map()
-                                    if (freeItemsMatch) {
-                                      freeItemsMatch[1]
-                                        .trim()
-                                        .split(',')
-                                        .forEach((itemStr) => {
-                                          const match = itemStr.trim().match(/^(.+?):(\d+)$/)
-                                          if (match) freeItemsMap.set(match[1].trim(), parseInt(match[2], 10))
-                                        })
-                                    }
-                                    let subtotal = 0
-                                    const lines =
-                                      order.Items?.map((item, idx) => {
-                                        const storedName = String(item.name || '')
-                                        const displayLines = formatOrderItemLinesForDisplay(storedName, { hideBundleIds: true })
-                                        const title = escapeHtml(displayLines[0] || '-')
-                                        const detailLines = displayLines
-                                          .slice(1)
-                                          .map(
-                                            (line) =>
-                                              `<div class="text-xs text-gray-600 mt-0.5">${escapeHtml(line)}</div>`
-                                          )
-                                          .join('')
-                                        const productId = item.id || ''
-                                        const freeQty = freeQtyForLineItem(freeItemsMap, storedName)
-                                        const paidQty = Math.max(0, (item.qty || 0) - freeQty)
-                                        const unitPrice = Number(item.price || 0)
-                                        const totalPrice = unitPrice * paidQty
-                                        subtotal += totalPrice
-                                        const qtyText =
-                                          freeQty > 0
-                                            ? `${item.qty || 0} (ชำระ ${paidQty}, แถม ${freeQty})`
-                                            : `${item.qty || 0}`
-                                        return `
-                                          <div class="rounded-lg border border-gray-200 bg-gray-50/60 p-2.5 mb-2 last:mb-0">
-                                            <div class="flex items-start justify-between gap-3">
-                                              <div class="min-w-0">
-                                                <div class="text-xs text-gray-500 mb-1">รายการที่ ${idx + 1}</div>
-                                                <div class="font-semibold text-gray-900 leading-tight">
-                                                  ${productId ? `<span class="text-gray-500 text-xs font-mono mr-1">${escapeHtml(String(productId))}</span>` : ''}${title}
-                                                </div>
-                                                ${detailLines}
-                                                <div class="text-xs text-gray-700 mt-1.5">
-                                                  จำนวน: <b>${qtyText}</b> • ราคา/หน่วย: ฿${unitPrice.toLocaleString()}
-                                                </div>
-                                              </div>
-                                              <div class="text-right shrink-0">
-                                                <div class="text-xs text-gray-500">รวมสุทธิ</div>
-                                                <div class="font-bold text-emerald-700">฿${totalPrice.toLocaleString()}</div>
-                                              </div>
-                                            </div>
-                                          </div>
-                                        `
-                                      }).join('') || '<p>ไม่มีรายการ</p>'
-                                    const ship = Number(
-                                      order['Shipping Cost'] || order.ShippingCost || order.Shipping || order.shipping || 0
-                                    )
-                                    const couponDisc = Number(order.Discount || order.discount || 0)
-                                    const promoDisc = Number(
-                                      order.PromotionDiscount || order.promotionDiscount || order.Promotion || 0
-                                    )
-                                    const grand =
-                                      Number(order.Total || order.total || 0) ||
-                                      subtotal - couponDisc - promoDisc + ship
-                                    const installmentDetailsHtml = buildInstallmentDetailsHtml(order)
-                                    return `
-                                    <div class="text-left space-y-3 text-gray-800">
-                                      <div class="grid grid-cols-2 gap-4 mb-3">
-                                        <div>
-                                          <span class="text-gray-600 text-sm">วิธีการชำระเงิน</span>
-                                          <div class="font-bold mt-1">${paymentMethodText}</div>
-                                        </div>
-                                        <div>
-                                          <span class="text-gray-600 text-sm">วิธีการรับสินค้า</span>
-                                          <div class="font-bold mt-1">${shippingMethodText}</div>
-                                        </div>
-                                      </div>
-                                      ${installmentDetailsHtml}
-                                      <div class="border-t pt-2">
-                                        <p class="font-bold mb-2">รายการสินค้า</p>
-                                        ${lines}
-                                      </div>
-                                      <div class="border-t pt-3 space-y-1 text-sm bg-gray-50 rounded p-3">
-                                        <div class="flex justify-between"><span>ยอดสินค้า (หลังหักแถมตามบรรทัด)</span><span class="font-semibold">฿${subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
-                                        ${couponDisc > 0 ? `<div class="flex justify-between text-red-600"><span>ส่วนลด (คูปอง/โค้ด)</span><span>-฿${couponDisc.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` : ''}
-                                        ${promoDisc > 0 ? `<div class="flex justify-between text-red-600"><span>ส่วนลดโปรโมชั่น</span><span>-฿${promoDisc.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` : ''}
-                                        <div class="flex justify-between"><span>ค่าจัดส่ง</span><span>฿${ship.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
-                                        <div class="flex justify-between text-base font-bold border-t border-gray-200 pt-2 mt-1"><span>ยอดรวมทั้งสิ้น</span><span>฿${grand.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
-                                      </div>
-                                    </div>
-                                  `
-                                  })(),
+                                  html: detailsHtml,
                                   width: '640px',
-                                  confirmButtonText: 'ปิด'
+                                  showDenyButton: true,
+                                  denyButtonText: 'พิมพ์',
+                                  confirmButtonText: 'ปิด',
+                                  denyButtonColor: '#2563eb',
+                                  confirmButtonColor: '#dc2626'
+                                }).then((result) => {
+                                  if (result.isDenied) handlePrintOrderDetails(order)
                                 })
                               }}
                               className="text-sm text-emerald-600 hover:text-emerald-700 font-bold underline"
