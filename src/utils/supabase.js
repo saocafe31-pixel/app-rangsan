@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, processLock } from '@supabase/supabase-js'
 
 const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').trim()
 const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_KEY || '').trim()
@@ -83,12 +83,27 @@ const authStorage = (() => {
 
 // ใช้ implicit flow เพื่อไม่ต้องเก็บ code verifier — เหมาะเมื่อ Tracking Prevention (Edge) หรือ privacy บล็อก storage
 // โทเค็นกลับมาใน URL #access_token=... แทน ?code= จึงไม่เกิด "PKCE code verifier not found"
+const FETCH_TIMEOUT_MS = 20000
+function fetchWithTimeout(input, init = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  if (init.signal) {
+    if (init.signal.aborted) controller.abort()
+    else init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
     flowType: 'implicit',
+    lock: processLock,
     ...(authStorage && { storage: authStorage })
+  },
+  global: {
+    fetch: fetchWithTimeout
   }
 })
